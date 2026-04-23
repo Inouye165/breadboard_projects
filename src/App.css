@@ -1,0 +1,229 @@
+.app-shell {
+  min-height: 100vh;
+  padding: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  box-sizing: border-box;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: end;
+}
+
+.eyebrow,
+.panel-kicker {
+  margin: 0 0 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+
+.header-copy {
+  max-width: 34rem;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+}
+
+.workspace-sidebar {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  gap: 20px;
+  min-height: 0;
+}
+
+.workspace-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 28px;
+  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+  position: relative;
+}
+
+.workspace-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.45), transparent 40%);
+  pointer-events: none;
+}
+
+.workspace-panel--primary {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.workspace-panel--secondary {
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+
+.panel-heading h2 {
+  margin: 0;
+}
+
+.panel-status {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: var(--badge-bg);
+  color: var(--accent-strong);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.breadboard-card {
+  flex: 1;
+  min-height: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(247, 201, 72, 0.25), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(56, 132, 255, 0.16), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(250, 247, 238, 0.92));
+  border: 1px solid rgba(137, 96, 20, 0.12);
+}
+
+.breadboard-frame {
+  width: min(100%, 620px);
+  aspect-ratio: 1.35;
+  border-radius: 30px;
+  padding: 22px;
+  background: linear-gradient(180deg, #fefdf9, #f6f1e3);
+  border: 1px solid rgba(110, 85, 34, 0.14);
+  box-shadow: 0 24px 60px rgba(99, 76, 34, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.breadboard-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgba(70, 63, 45, 0.18);
+}
+
+.breadboard-prompt {
+  width: min(100%, 480px);
+  padding: 28px;
+  border-radius: 24px;
+  background: rgba(255, 252, 244, 0.9);
+  border: 1px dashed rgba(127, 92, 24, 0.28);
+  text-align: left;
+}
+
+.breadboard-prompt h3 {
+  margin: 0 0 12px;
+  font-size: 1.45rem;
+  color: var(--text-strong);
+}
+
+.breadboard-prompt p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.breadboard-prompt ul {
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.breadboard-prompt li {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--text-strong);
+  border: 1px solid rgba(137, 96, 20, 0.12);
+}
+
+.blank-state {
+  flex: 1;
+  border-radius: 22px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.65), rgba(241, 236, 225, 0.85)),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 12px,
+      rgba(132, 110, 74, 0.05) 12px,
+      rgba(132, 110, 74, 0.05) 24px
+    );
+  border: 1px dashed rgba(101, 80, 44, 0.16);
+}
+
+@media (max-width: 1080px) {
+  .app-shell {
+    padding: 24px;
+  }
+
+  .app-header,
+  .panel-heading {
+    flex-direction: column;
+    align-items: start;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-sidebar {
+    grid-template-rows: repeat(2, minmax(220px, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 16px;
+    gap: 18px;
+  }
+
+  .workspace-panel--primary,
+  .workspace-panel--secondary {
+    padding: 16px;
+  }
+
+  .breadboard-card {
+    min-height: 380px;
+    padding: 16px;
+  }
+
+  .breadboard-prompt {
+    padding: 20px;
+  }
+}

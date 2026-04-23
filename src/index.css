@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap');
+
+:root {
+  --page-bg: #f4efe4;
+  --page-bg-strong: #e8dcc2;
+  --panel-bg: rgba(255, 250, 240, 0.76);
+  --panel-border: rgba(114, 88, 39, 0.14);
+  --panel-shadow: 0 24px 60px rgba(61, 48, 22, 0.12);
+  --text-strong: #2c2314;
+  --text-muted: #6f624b;
+  --accent-strong: #b96b00;
+  --badge-bg: rgba(245, 209, 144, 0.3);
+  --sans: 'Manrope', 'Segoe UI', sans-serif;
+  --heading: 'Space Grotesk', 'Segoe UI', sans-serif;
+  font-family: var(--sans);
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text-strong);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.9), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(232, 220, 194, 0.76), transparent 36%),
+    linear-gradient(180deg, var(--page-bg), #f8f3e9 58%, #f1e8d6);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--page-bg);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--heading);
+  letter-spacing: -0.03em;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.25rem, 3vw, 4.4rem);
+  line-height: 0.98;
+  max-width: 12ch;
+}
+
+h2 {
+  font-size: 1.35rem;
+}
+
+p {
+  font-size: 1rem;
+}
+
+img {
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+}
