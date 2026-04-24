@@ -10,6 +10,11 @@ import {
   type PartRegionAnchor,
 } from './parts'
 
+type Position = {
+  x: number
+  y: number
+}
+
 type BreadboardPointLabel = {
   id: string
   label: string
@@ -253,6 +258,155 @@ export function createBreadboardPartDefinition({
     metadata: {
       kind: 'breadboard',
       regions: nextRegions.map((entry) => entry.region),
+    },
+  }
+}
+
+export function createEmptyBreadboardPartDefinition({
+  id,
+  name,
+  imageSrc,
+  image,
+  imageWidth,
+  imageHeight,
+}: BreadboardDefinitionOptions): PartDefinition {
+  return {
+    id,
+    name,
+    imageSrc: imageSrc ?? image ?? '',
+    imageWidth,
+    imageHeight,
+    points: [],
+    metadata: {
+      kind: 'breadboard',
+      regions: [],
+    },
+  }
+}
+
+export function parseGridSize(value: string) {
+  const match = value.trim().match(/^(\d+)\s*(?:x|by)\s*(\d+)$/i)
+
+  if (!match) {
+    return undefined
+  }
+
+  const rows = Number(match[1])
+  const columns = Number(match[2])
+
+  if (!rows || !columns) {
+    return undefined
+  }
+
+  return { rows, columns }
+}
+
+export function createBreadboardGridGroup({
+  groupId,
+  label,
+  rows,
+  columns,
+  topLeft,
+  bottomRight,
+}: {
+  groupId: string
+  label: string
+  rows: number
+  columns: number
+  topLeft: Position
+  bottomRight: Position
+}) {
+  const normalizedTopLeft = {
+    x: clampNormalized(Math.min(topLeft.x, bottomRight.x)),
+    y: clampNormalized(Math.min(topLeft.y, bottomRight.y)),
+  }
+  const normalizedBottomRight = {
+    x: clampNormalized(Math.max(topLeft.x, bottomRight.x)),
+    y: clampNormalized(Math.max(topLeft.y, bottomRight.y)),
+  }
+  const anchors = [
+    createAnchor('topLeft', 'Top left', normalizedTopLeft.x, normalizedTopLeft.y),
+    createAnchor('topRight', 'Top right', normalizedBottomRight.x, normalizedTopLeft.y),
+    createAnchor('bottomLeft', 'Bottom left', normalizedTopLeft.x, normalizedBottomRight.y),
+    createAnchor('bottomRight', 'Bottom right', normalizedBottomRight.x, normalizedBottomRight.y),
+  ]
+  const pointIdsByRow = new Map<string, string[]>()
+  const pointIdsByColumn = new Map<string, string[]>()
+  const points: PartPoint[] = []
+
+  for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+    pointIdsByRow.set(String(rowIndex + 1), [])
+  }
+
+  for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+    pointIdsByColumn.set(String(columnIndex + 1), [])
+  }
+
+  for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+    const rowRatio = rows === 1 ? 0 : rowIndex / (rows - 1)
+
+    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+      const columnRatio = columns === 1 ? 0 : columnIndex / (columns - 1)
+      const position = fitAnchorPoint(anchors, columnRatio, rowRatio)
+      const rowId = String(rowIndex + 1)
+      const columnId = String(columnIndex + 1)
+      const pointId = `${groupId}:${rowId}-${columnId}`
+
+      points.push({
+        id: pointId,
+        label: `${label} ${rowId},${columnId}`,
+        x: position.x,
+        y: position.y,
+        kind: 'breadboard-hole',
+        group: groupId,
+      })
+
+      pointIdsByRow.get(rowId)?.push(pointId)
+      pointIdsByColumn.get(columnId)?.push(pointId)
+    }
+  }
+
+  return {
+    points,
+    region: {
+      id: groupId,
+      name: label,
+      pointIds: points.map((point) => point.id),
+      rows: Array.from(pointIdsByRow.entries()).map(([id, pointIds]) => ({
+        id,
+        label: `Row ${id}`,
+        pointIds,
+      })),
+      columns: Array.from(pointIdsByColumn.entries()).map(([id, pointIds]) => ({
+        id,
+        label: `Column ${id}`,
+        pointIds,
+      })),
+      anchors,
+      defaultAnchors: anchors,
+    } satisfies PartRegion,
+  }
+}
+
+export function addBreadboardGridGroup(
+  definition: PartDefinition,
+  options: {
+    groupId: string
+    label: string
+    rows: number
+    columns: number
+    topLeft: Position
+    bottomRight: Position
+  },
+) {
+  const nextGroup = createBreadboardGridGroup(options)
+
+  return {
+    ...definition,
+    points: [...definition.points, ...nextGroup.points],
+    metadata: {
+      ...definition.metadata,
+      regions: [...(definition.metadata.regions ?? []), nextGroup.region],
     },
   }
 }

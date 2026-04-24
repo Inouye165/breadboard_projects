@@ -24,9 +24,9 @@ describe('BreadboardCanvas', () => {
 
     expect(view.getByLabelText(/part editor/i)).toBeInTheDocument()
     expect(view.getByRole('button', { name: /replace image/i })).toBeInTheDocument()
-    expect(view.getByRole('button', { name: /(show|hide) points/i })).toBeInTheDocument()
-    expect(view.getByRole('button', { name: /save part definition/i })).toBeInTheDocument()
-    expect(view.getByLabelText(/part kind/i)).toHaveValue('breadboard')
+    expect(view.getByRole('button', { name: /add point group/i })).toBeInTheDocument()
+    expect(view.getByLabelText(/grid size/i)).toHaveValue('2x10')
+    expect(view.queryAllByRole('button', { name: /connection point/i })).toHaveLength(0)
   })
 
   it('forwards a selected file from the fallback input', () => {
@@ -44,16 +44,59 @@ describe('BreadboardCanvas', () => {
     expect(onImageSelected).toHaveBeenCalledWith(file)
   })
 
-  it('supports switching to manual placement for non-breadboard parts', () => {
-    render(
-      <BreadboardCanvas imageSrc="/example-board.png" imageName="module-board" onImageSelected={vi.fn()} />,
+  it('restores autosaved groups for the same board later', () => {
+    window.localStorage.setItem(
+      'breadboard-projects.part-definitions',
+      JSON.stringify({
+        'breadboard:autosaved-board': {
+          id: 'breadboard:autosaved-board',
+          name: 'autosaved-board',
+          imageSrc: '/example-board.png',
+          imageWidth: 1200,
+          imageHeight: 420,
+          points: [
+            {
+              id: 'group-1:1-1',
+              label: 'Group 1 1,1',
+              x: 0.2,
+              y: 0.2,
+              kind: 'breadboard-hole',
+              group: 'group-1',
+            },
+          ],
+          metadata: {
+            kind: 'breadboard',
+            regions: [
+              {
+                id: 'group-1',
+                name: 'Group 1',
+                pointIds: ['group-1:1-1'],
+                rows: [{ id: '1', label: 'Row 1', pointIds: ['group-1:1-1'] }],
+                columns: [{ id: '1', label: 'Column 1', pointIds: ['group-1:1-1'] }],
+                anchors: [
+                  { key: 'topLeft', label: 'Top left', x: 0.2, y: 0.2 },
+                  { key: 'topRight', label: 'Top right', x: 0.2, y: 0.2 },
+                  { key: 'bottomLeft', label: 'Bottom left', x: 0.2, y: 0.2 },
+                  { key: 'bottomRight', label: 'Bottom right', x: 0.2, y: 0.2 },
+                ],
+                defaultAnchors: [
+                  { key: 'topLeft', label: 'Top left', x: 0.2, y: 0.2 },
+                  { key: 'topRight', label: 'Top right', x: 0.2, y: 0.2 },
+                  { key: 'bottomLeft', label: 'Bottom left', x: 0.2, y: 0.2 },
+                  { key: 'bottomRight', label: 'Bottom right', x: 0.2, y: 0.2 },
+                ],
+              },
+            ],
+          },
+        },
+      }),
     )
 
-    fireEvent.change(screen.getByLabelText(/part kind/i), {
-      target: { value: 'module' },
-    })
+    render(
+      <BreadboardCanvas imageSrc="/example-board.png" imageName="autosaved-board" onImageSelected={vi.fn()} />,
+    )
 
-    expect(screen.getByRole('button', { name: /add point/i })).toBeInTheDocument()
-    expect(screen.getByText(/ready for manual point placement/i)).toBeInTheDocument()
+    expect(screen.getByText(/restored your saved points for this board/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /connection point group 1 1,1/i })).toBeInTheDocument()
   })
 })

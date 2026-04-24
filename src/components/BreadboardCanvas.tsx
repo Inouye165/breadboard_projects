@@ -314,6 +314,7 @@ export function BreadboardCanvas({ imageSrc, imageName, onImageSelected }: Bread
             <div className="breadboard-media">
               {displayImage ? (
                 <PartEditor
+                  key={`${imageName ?? 'breadboard'}:${displayImage.width}x${displayImage.height}:${displayImage.src}`}
                   imageSrc={displayImage.src}
                   imageWidth={displayImage.width}
                   imageHeight={displayImage.height}
