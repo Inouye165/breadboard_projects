@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 
 import { ImageWorkspace } from './ImageWorkspace'
@@ -38,7 +38,9 @@ describe('ImageWorkspace', () => {
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
         onRotationInputChange={vi.fn()}
-        onApplyRotation={vi.fn()}
+        onRotateLeft={vi.fn()}
+        onRotateRight={vi.fn()}
+        onNudgeGuideLine={vi.fn()}
         onResetAlignment={vi.fn()}
         onSaveAlignment={vi.fn()}
       />,
@@ -48,8 +50,9 @@ describe('ImageWorkspace', () => {
 
     expect(stage.querySelector('.image-stage__guide-line')).toBeTruthy()
     expect(screen.getByLabelText(/guide line/i)).toBeTruthy()
-    expect(screen.getByLabelText(/rotate by deg/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /apply rotation/i })).toBeTruthy()
+    expect(screen.getByLabelText(/rotation step/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /rotate left/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /rotate right/i })).toBeTruthy()
   })
 
   it('does not render pin or grid overlays', async () => {
@@ -64,7 +67,9 @@ describe('ImageWorkspace', () => {
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
         onRotationInputChange={vi.fn()}
-        onApplyRotation={vi.fn()}
+        onRotateLeft={vi.fn()}
+        onRotateRight={vi.fn()}
+        onNudgeGuideLine={vi.fn()}
         onResetAlignment={vi.fn()}
         onSaveAlignment={vi.fn()}
       />,
@@ -90,7 +95,9 @@ describe('ImageWorkspace', () => {
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
         onRotationInputChange={vi.fn()}
-        onApplyRotation={vi.fn()}
+        onRotateLeft={vi.fn()}
+        onRotateRight={vi.fn()}
+        onNudgeGuideLine={vi.fn()}
         onResetAlignment={vi.fn()}
         onSaveAlignment={vi.fn()}
       />,
@@ -101,5 +108,42 @@ describe('ImageWorkspace', () => {
     expect(stage.tagName.toLowerCase()).toBe('svg')
     expect(stage.classList.contains('image-stage__svg')).toBe(true)
     expect(stage.getAttribute('viewBox')).toBe('0 0 1000 500')
+  })
+
+  it('nudges rotation and guide line from the keyboard when the stage is focused', async () => {
+    const onRotateLeft = vi.fn()
+    const onRotateRight = vi.fn()
+    const onNudgeGuideLine = vi.fn()
+
+    render(
+      <ImageWorkspace
+        imageName="board.png"
+        imagePath="/board.png"
+        rotationDegrees={0}
+        guideLinePercent={25}
+        rotationInput="0.25"
+        status="Saved image loaded"
+        onUploadRequest={vi.fn()}
+        onGuideLineChange={vi.fn()}
+        onRotationInputChange={vi.fn()}
+        onRotateLeft={onRotateLeft}
+        onRotateRight={onRotateRight}
+        onNudgeGuideLine={onNudgeGuideLine}
+        onResetAlignment={vi.fn()}
+        onSaveAlignment={vi.fn()}
+      />,
+    )
+
+    const stage = await screen.findByRole('img', { name: /breadboard image board.png/i })
+
+    fireEvent.keyDown(stage, { key: 'ArrowLeft' })
+    fireEvent.keyDown(stage, { key: 'ArrowRight', shiftKey: true })
+    fireEvent.keyDown(stage, { key: 'ArrowUp' })
+    fireEvent.keyDown(stage, { key: 'ArrowDown', shiftKey: true })
+
+    expect(onRotateLeft).toHaveBeenCalledWith(1)
+    expect(onRotateRight).toHaveBeenCalledWith(10)
+    expect(onNudgeGuideLine).toHaveBeenCalledWith(-1, 1)
+    expect(onNudgeGuideLine).toHaveBeenCalledWith(1, 10)
   })
 })

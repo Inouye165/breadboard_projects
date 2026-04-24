@@ -12,7 +12,9 @@ type ImageWorkspaceProps = {
   onUploadRequest: () => void
   onGuideLineChange: (value: number) => void
   onRotationInputChange: (value: string) => void
-  onApplyRotation: () => void
+  onRotateLeft: (multiplier?: number) => void
+  onRotateRight: (multiplier?: number) => void
+  onNudgeGuideLine: (direction: -1 | 1, multiplier?: number) => void
   onResetAlignment: () => void
   onSaveAlignment: () => void
 }
@@ -78,16 +80,59 @@ export function ImageWorkspace({
   onUploadRequest,
   onGuideLineChange,
   onRotationInputChange,
-  onApplyRotation,
+  onRotateLeft,
+  onRotateRight,
+  onNudgeGuideLine,
   onResetAlignment,
   onSaveAlignment,
 }: ImageWorkspaceProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [imageDimensions, setImageDimensions] = useState<ImageDimensions>()
+  const [isDraggingGuideLine, setIsDraggingGuideLine] = useState(false)
   const layout = imageDimensions
     ? getRotatedLayout(imageDimensions.width, imageDimensions.height, rotationDegrees)
     : undefined
   const guideLineY = layout ? (guideLinePercent / 100) * layout.height : 0
+
+  function updateGuideLineFromPointer(clientY: number) {
+    if (!layout || !svgRef.current) {
+      return
+    }
+
+    const rect = svgRef.current.getBoundingClientRect()
+
+    if (rect.height <= 0) {
+      return
+    }
+
+    const nextPercent = ((clientY - rect.top) / rect.height) * 100
+    onGuideLineChange(nextPercent)
+  }
+
+  function handleStageKeyDown(event: React.KeyboardEvent<SVGSVGElement>) {
+    const multiplier = event.shiftKey ? 10 : 1
+
+    switch (event.key) {
+      case 'ArrowLeft':
+        event.preventDefault()
+        onRotateLeft(multiplier)
+        break
+      case 'ArrowRight':
+        event.preventDefault()
+        onRotateRight(multiplier)
+        break
+      case 'ArrowUp':
+        event.preventDefault()
+        onNudgeGuideLine(-1, event.shiftKey ? 10 : 1)
+        break
+      case 'ArrowDown':
+        event.preventDefault()
+        onNudgeGuideLine(1, event.shiftKey ? 10 : 1)
+        break
+      default:
+        break
+    }
+  }
 
   useEffect(() => {
     if (!imagePath) {
@@ -134,6 +179,12 @@ export function ImageWorkspace({
               Replace image
             </button>
           ) : null}
+          <div className="control-guide">
+            <p className="control-guide__title">Live controls</p>
+            <p className="control-guide__body">
+              Click the image to focus it. Left and right arrows rotate by the step below. Up and down arrows move the guide line. Hold Shift for faster moves, or drag the guide line directly.
+            </p>
+          </div>
           <label className="control-group" htmlFor="guide-line-position">
             <span className="control-group__label">Guide line</span>
             <input
@@ -149,7 +200,7 @@ export function ImageWorkspace({
             />
           </label>
           <label className="control-group" htmlFor="rotation-amount">
-            <span className="control-group__label">Rotate by deg</span>
+            <span className="control-group__label">Rotation step (deg)</span>
             <input
               id="rotation-amount"
               className="control-group__input"
@@ -163,10 +214,18 @@ export function ImageWorkspace({
           <button
             type="button"
             className="action-button"
-            onClick={onApplyRotation}
+            onClick={() => onRotateLeft()}
             disabled={!imagePath || isBusy}
           >
-            Apply rotation
+            Rotate left
+          </button>
+          <button
+            type="button"
+            className="action-button"
+            onClick={() => onRotateRight()}
+            disabled={!imagePath || isBusy}
+          >
+            Rotate right
           </button>
           <button
             type="button"
@@ -197,14 +256,16 @@ export function ImageWorkspace({
               viewBox={`0 0 ${layout.width} ${layout.height}`}
               role="img"
               aria-label={imageName ? `Breadboard image ${imageName}` : 'Breadboard image'}
+              tabIndex={0}
+              onKeyDown={handleStageKeyDown}
+              onPointerMove={(event) => {
+                if (isDraggingGuideLine) {
+                  updateGuideLineFromPointer(event.clientY)
+                }
+              }}
+              onPointerUp={() => setIsDraggingGuideLine(false)}
+              onPointerLeave={() => setIsDraggingGuideLine(false)}
             >
-              <line
-                className="image-stage__guide-line"
-                x1="0"
-                y1={guideLineY}
-                x2={layout.width}
-                y2={guideLineY}
-              />
               <g
                 className="image-stage__transform"
                 transform={`translate(${layout.offsetX} ${layout.offsetY}) rotate(${rotationDegrees} ${imageDimensions.width / 2} ${imageDimensions.height / 2})`}
@@ -216,6 +277,32 @@ export function ImageWorkspace({
                   preserveAspectRatio="none"
                 />
               </g>
+              <line
+                className="image-stage__guide-line-hitbox"
+                x1="0"
+                y1={guideLineY}
+                x2={layout.width}
+                y2={guideLineY}
+                onPointerDown={(event) => {
+                  setIsDraggingGuideLine(true)
+                  updateGuideLineFromPointer(event.clientY)
+                }}
+              />
+              <line
+                className="image-stage__guide-line-shadow"
+                x1="0"
+                y1={guideLineY}
+                x2={layout.width}
+                y2={guideLineY}
+              />
+              <line
+                className="image-stage__guide-line"
+                x1="0"
+                y1={guideLineY}
+                x2={layout.width}
+                y2={guideLineY}
+              />
+              <circle className="image-stage__guide-handle" cx={layout.width - 20} cy={guideLineY} r="10" />
             </svg>
           </div>
         ) : (

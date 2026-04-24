@@ -6,8 +6,16 @@ import { createDefaultAlignment, type SavedWorkspace } from './lib/imageAlignmen
 import { ensureLandscapeFile, rotateImageFile } from './lib/imageOrientation'
 import { loadSavedWorkspace, saveWorkspace, uploadWorkspaceImage } from './lib/imageWorkspaceApi'
 
+const GUIDE_LINE_MIN = 0
+const GUIDE_LINE_MAX = 100
+const GUIDE_LINE_STEP = 0.5
+
 function alignmentsMatch(left: SavedWorkspace['alignment'], right: SavedWorkspace['alignment']) {
   return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function clampGuideLinePercent(value: number) {
+  return Math.min(GUIDE_LINE_MAX, Math.max(GUIDE_LINE_MIN, value))
 }
 
 function App() {
@@ -42,8 +50,8 @@ function App() {
         setDraftAlignment(savedWorkspace.alignment)
         setStatus(
           savedWorkspace.alignment.rotationDegrees === 0
-            ? 'Saved image loaded. Move the guide line, enter a rotation amount, and apply it until the image aligns.'
-            : 'Saved image loaded with a preview rotation. Fine tune it, then save to bake it into the image.',
+            ? 'Saved image loaded. Click the stage, drag the guide, or use arrow keys to align it in real time.'
+            : 'Saved image loaded with a preview rotation. Fine tune it live, then save to bake it into the image.',
         )
       } catch {
         if (isActive) {
@@ -144,7 +152,7 @@ function App() {
       normalizedImagePathsRef.current.add(nextWorkspace.imagePath)
       setWorkspace(nextWorkspace)
       setDraftAlignment(nextWorkspace.alignment)
-      setStatus('Image saved locally. Move the guide line, enter a rotation amount, and apply it until the image aligns.')
+      setStatus('Image saved locally. Click the stage, drag the guide, or use arrow keys to align it in real time.')
     } catch {
       setStatus('Could not save the selected image into local repo storage.')
     } finally {
@@ -152,23 +160,55 @@ function App() {
     }
   }
 
-  function handleApplyRotation() {
-    if (!workspace) {
-      return
-    }
-
+  function getRotationStep() {
     const rotationStep = Number.parseFloat(rotationInput)
 
-    if (!Number.isFinite(rotationStep) || rotationStep === 0) {
-      setStatus('Enter a positive or negative rotation amount in degrees before applying it.')
+    return Number.isFinite(rotationStep) && rotationStep > 0 ? rotationStep : null
+  }
+
+  function updatePreviewRotation(delta: number) {
+    if (!workspace || delta === 0) {
       return
     }
 
     setDraftAlignment((currentAlignment) => ({
-      rotationDegrees: currentAlignment.rotationDegrees + rotationStep,
+      rotationDegrees: currentAlignment.rotationDegrees + delta,
       referencePoints: null,
     }))
-    setStatus('Rotation preview updated. Save alignment to bake this rotation into the stored image.')
+    setStatus('Rotation preview updated live. Save alignment to bake this rotation into the stored image.')
+  }
+
+  function handleRotateLeft(multiplier = 1) {
+    const rotationStep = getRotationStep()
+
+    if (!rotationStep) {
+      setStatus('Enter a positive rotation step in degrees before rotating the preview.')
+      return
+    }
+
+    updatePreviewRotation(-rotationStep * multiplier)
+  }
+
+  function handleRotateRight(multiplier = 1) {
+    const rotationStep = getRotationStep()
+
+    if (!rotationStep) {
+      setStatus('Enter a positive rotation step in degrees before rotating the preview.')
+      return
+    }
+
+    updatePreviewRotation(rotationStep * multiplier)
+  }
+
+  function handleGuideLineChange(nextPercent: number) {
+    setGuideLinePercent(clampGuideLinePercent(nextPercent))
+  }
+
+  function handleNudgeGuideLine(direction: -1 | 1, multiplier = 1) {
+    setGuideLinePercent((currentValue) =>
+      clampGuideLinePercent(currentValue + direction * GUIDE_LINE_STEP * multiplier),
+    )
+    setStatus('Guide line moved. Keep aligning live, then save when the image matches the guide.')
   }
 
   function handleResetAlignment() {
@@ -238,9 +278,11 @@ function App() {
         isSaveDisabled={!hasUnsavedAlignment}
         status={status}
         onUploadRequest={handleUploadRequest}
-        onGuideLineChange={setGuideLinePercent}
+        onGuideLineChange={handleGuideLineChange}
         onRotationInputChange={setRotationInput}
-        onApplyRotation={handleApplyRotation}
+        onRotateLeft={handleRotateLeft}
+        onRotateRight={handleRotateRight}
+        onNudgeGuideLine={handleNudgeGuideLine}
         onResetAlignment={handleResetAlignment}
         onSaveAlignment={handleSaveAlignment}
       />
