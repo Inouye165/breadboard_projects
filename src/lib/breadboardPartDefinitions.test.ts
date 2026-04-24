@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  addBreadboardGridGroup,
-  createBreadboardGridGroup,
-  createEmptyBreadboardPartDefinition,
+  createBreadboardPartDefinition,
+  createStandardBreadboardTemplate,
+  fitAnchorPoint,
+  moveBreadboardColumn,
+  moveBreadboardPoint,
   moveBreadboardRegion,
-  parseGridSize,
+  moveBreadboardRow,
 } from './breadboardPartDefinitions'
 
 function createTestDefinition() {
-  return createEmptyBreadboardPartDefinition({
+  return createBreadboardPartDefinition({
     id: 'breadboard',
     name: 'Breadboard',
     imageSrc: '/breadboard.png',
@@ -18,78 +20,80 @@ function createTestDefinition() {
   })
 }
 
-describe('createBreadboardPartDefinition', () => {
-  it('starts as a clean slate with no points', () => {
+describe('breadboardPartDefinitions', () => {
+  it('creates the standard solderless breadboard regions by default', () => {
     const definition = createTestDefinition()
 
     expect(definition.metadata.kind).toBe('breadboard')
-    expect(definition.metadata.regions).toHaveLength(0)
-    expect(definition.points).toHaveLength(0)
+    expect(definition.metadata.regions).toHaveLength(4)
+    expect(definition.metadata.template?.columnCount).toBe(60)
+    expect(definition.points).toHaveLength(840)
   })
 
-  it('parses grid sizes like 2x10 and 7 by 60', () => {
-    expect(parseGridSize('2x10')).toEqual({ rows: 2, columns: 10 })
-    expect(parseGridSize('7 by 60')).toEqual({ rows: 7, columns: 60 })
-    expect(parseGridSize('bad')).toBeUndefined()
+  it('assigns continuity groups per terminal column and per rail segment', () => {
+    const definition = createTestDefinition()
+
+    expect(definition.points.find((point) => point.id === 'A1')?.group).toBe('upper-terminal-strip:column:1')
+    expect(definition.points.find((point) => point.id === 'E1')?.group).toBe('upper-terminal-strip:column:1')
+    expect(definition.points.find((point) => point.id === 'F1')?.group).toBe('lower-terminal-strip:column:1')
+    expect(definition.points.find((point) => point.id === 'top-power-rails:top-positive:1')?.group).toBe(
+      'top-power-rails:top-positive:main',
+    )
   })
 
-  it('creates evenly spaced points from top-left to bottom-right', () => {
-    const group = createBreadboardGridGroup({
-      groupId: 'group-1',
-      label: 'Group 1',
-      rows: 2,
-      columns: 3,
-      topLeft: { x: 0.2, y: 0.3 },
-      bottomRight: { x: 0.8, y: 0.7 },
+  it('maps anchor positions with bilinear interpolation', () => {
+    const position = fitAnchorPoint(
+      [
+        { key: 'topLeft', label: 'Top left', x: 0.1, y: 0.2 },
+        { key: 'topRight', label: 'Top right', x: 0.9, y: 0.2 },
+        { key: 'bottomLeft', label: 'Bottom left', x: 0.1, y: 0.8 },
+        { key: 'bottomRight', label: 'Bottom right', x: 0.9, y: 0.8 },
+      ],
+      0.5,
+      0.5,
+    )
+
+    expect(position.x).toBeCloseTo(0.5)
+    expect(position.y).toBeCloseTo(0.5)
+  })
+
+  it('supports alternate board sizes through a configurable template column count', () => {
+    const template = createStandardBreadboardTemplate(30)
+    const definition = createBreadboardPartDefinition({
+      id: 'small-board',
+      name: 'Small Board',
+      imageSrc: '/small-board.png',
+      imageWidth: 800,
+      imageHeight: 320,
+      template,
     })
 
-    expect(group.points).toHaveLength(6)
-    expect(group.points.find((point) => point.id === 'group-1:1-1')).toMatchObject({ x: 0.2, y: 0.3 })
-    expect(group.points.find((point) => point.id === 'group-1:1-2')).toMatchObject({ x: 0.5, y: 0.3 })
-    expect(group.points.find((point) => point.id === 'group-1:2-3')).toMatchObject({ x: 0.8, y: 0.7 })
+    expect(definition.metadata.template?.columnCount).toBe(30)
+    expect(definition.metadata.regions?.[1]?.columns).toHaveLength(30)
   })
 
-  it('adds a generated grid as a movable group', () => {
-    const definition = addBreadboardGridGroup(createTestDefinition(), {
-      groupId: 'group-1',
-      label: 'Group 1',
-      rows: 2,
-      columns: 2,
-      topLeft: { x: 0.2, y: 0.2 },
-      bottomRight: { x: 0.4, y: 0.4 },
-    })
+  it('moves regions by updating all anchor-mapped point coordinates', () => {
+    const definition = createTestDefinition()
+    const original = definition.points.find((point) => point.id === 'A1')
+    const movedRegion = moveBreadboardRegion(definition, 'upper-terminal-strip', 0.01, 0.02)
 
-    expect(definition.metadata.regions).toHaveLength(1)
-    expect(definition.metadata.regions?.[0]?.name).toBe('Group 1')
-    expect(definition.points).toHaveLength(4)
+    expect(movedRegion.points.find((point) => point.id === 'A1')?.x).toBeCloseTo((original?.x ?? 0) + 0.01)
+    expect(movedRegion.points.find((point) => point.id === 'A1')?.y).toBeCloseTo((original?.y ?? 0) + 0.02)
   })
 
-  it('moves a generated group by updating all point coordinates', () => {
-    const definition = addBreadboardGridGroup(createTestDefinition(), {
-      groupId: 'group-1',
-      label: 'Group 1',
-      rows: 2,
-      columns: 2,
-      topLeft: { x: 0.2, y: 0.2 },
-      bottomRight: { x: 0.4, y: 0.4 },
-    })
-    const movedRegion = moveBreadboardRegion(definition, 'group-1', 0.01, 0.02)
+  it('updates row, column, and point offsets independently', () => {
+    const definition = createTestDefinition()
+    const original = definition.points.find((point) => point.id === 'A1')
+    const rowMoved = moveBreadboardRow(definition, 'upper-terminal-strip', 'A', 0, 0.01)
+    const columnMoved = moveBreadboardColumn(rowMoved, 'upper-terminal-strip', '1', 0.02)
+    const pointMoved = moveBreadboardPoint(columnMoved, 'upper-terminal-strip', 'A1', 0.01, -0.01)
 
-    expect(movedRegion.points.find((point) => point.id === 'group-1:1-1')?.x).toBeCloseTo(0.21)
-    expect(movedRegion.points.find((point) => point.id === 'group-1:1-1')?.y).toBeCloseTo(0.22)
-    expect(movedRegion.points.find((point) => point.id === 'group-1:2-2')?.x).toBeCloseTo(0.41)
-    expect(movedRegion.points.find((point) => point.id === 'group-1:2-2')?.y).toBeCloseTo(0.42)
+    expect(pointMoved.points.find((point) => point.id === 'A1')?.x).toBeCloseTo((original?.x ?? 0) + 0.03)
+    expect(pointMoved.points.find((point) => point.id === 'A1')?.y).toBeCloseTo(original?.y ?? 0)
   })
 
   it('keeps generated point coordinates normalized', () => {
-    const definition = addBreadboardGridGroup(createTestDefinition(), {
-      groupId: 'group-1',
-      label: 'Group 1',
-      rows: 7,
-      columns: 60,
-      topLeft: { x: 0.1, y: 0.2 },
-      bottomRight: { x: 0.9, y: 0.8 },
-    })
+    const definition = createTestDefinition()
 
     definition.points.forEach((point) => {
       expect(point.x).toBeGreaterThanOrEqual(0)

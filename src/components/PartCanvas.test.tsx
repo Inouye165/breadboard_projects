@@ -65,4 +65,43 @@ describe('PartCanvas', () => {
     expect(onPointPointerDown).toHaveBeenCalledWith('P1')
     expect(onPointDrag).toHaveBeenCalled()
   })
+
+  it('renders region anchors when region metadata is present', () => {
+    render(
+      <PartCanvas
+        definition={{
+          ...testDefinition,
+          metadata: {
+            kind: 'breadboard',
+            regions: [
+              {
+                id: 'region-1',
+                name: 'Region 1',
+                kind: 'custom-grid',
+                pointIds: ['P1', 'P2'],
+                rows: [{ id: 'row-1', label: 'Row 1', pointIds: ['P1'] }],
+                columns: [{ id: 'col-1', label: 'Column 1', pointIds: ['P1', 'P2'] }],
+                anchors: [
+                  { key: 'topLeft', label: 'Top left', x: 0.1, y: 0.1 },
+                  { key: 'topRight', label: 'Top right', x: 0.9, y: 0.1 },
+                  { key: 'bottomLeft', label: 'Bottom left', x: 0.1, y: 0.9 },
+                  { key: 'bottomRight', label: 'Bottom right', x: 0.9, y: 0.9 },
+                ],
+                defaultAnchors: [
+                  { key: 'topLeft', label: 'Top left', x: 0.1, y: 0.1 },
+                  { key: 'topRight', label: 'Top right', x: 0.9, y: 0.1 },
+                  { key: 'bottomLeft', label: 'Bottom left', x: 0.1, y: 0.9 },
+                  { key: 'bottomRight', label: 'Bottom right', x: 0.9, y: 0.9 },
+                ],
+              },
+            ],
+          },
+        }}
+        selectedRegionId="region-1"
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /region 1 top left anchor/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /region 1 region/i })).toBeInTheDocument()
+  })
 })

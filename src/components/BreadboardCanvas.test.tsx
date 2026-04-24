@@ -24,9 +24,9 @@ describe('BreadboardCanvas', () => {
 
     expect(view.getByLabelText(/part editor/i)).toBeInTheDocument()
     expect(view.getByRole('button', { name: /replace image/i })).toBeInTheDocument()
-    expect(view.getByRole('button', { name: /add point group/i })).toBeInTheDocument()
-    expect(view.getByLabelText(/grid size/i)).toHaveValue('2x10')
-    expect(view.queryAllByRole('button', { name: /connection point/i })).toHaveLength(0)
+    expect(view.getByRole('button', { name: /save aligned definition/i })).toBeInTheDocument()
+    expect(view.getByRole('combobox', { name: /^region$/i })).toBeInTheDocument()
+    expect(view.getByRole('button', { name: /upper terminal strip top left anchor/i })).toBeInTheDocument()
   })
 
   it('forwards a selected file from the fallback input', () => {
@@ -96,7 +96,7 @@ describe('BreadboardCanvas', () => {
       <BreadboardCanvas imageSrc="/example-board.png" imageName="autosaved-board" onImageSelected={vi.fn()} />,
     )
 
-    expect(screen.getByText(/restored your saved points for this board/i)).toBeInTheDocument()
+    expect(screen.getByText(/restored your saved calibration for this board/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /connection point group 1 1,1/i })).toBeInTheDocument()
   })
 })
