@@ -1,15 +1,13 @@
+export type Position = {
+  x: number
+  y: number
+}
+
 export type PartKind = 'breadboard' | 'microcontroller' | 'module' | 'sensor' | 'custom'
 
 export type PartPointKind = 'breadboard-hole' | 'pin' | 'rail'
 
-export type PartPoint = {
-  id: string
-  label: string
-  x: number
-  y: number
-  kind: PartPointKind
-  group?: string
-}
+export type BreadboardRegionKind = 'terminal-strip' | 'power-rail' | 'custom-grid'
 
 export type PartRegionAnchorKey = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight'
 
@@ -26,9 +24,67 @@ export type PartAxisGroup = {
   pointIds: string[]
 }
 
-export type PartRegion = {
+export type ConnectionPoint = {
+  id: string
+  label: string
+  x: number
+  y: number
+  kind: PartPointKind
+  group?: string
+  regionId?: string
+  rowId?: string
+  columnId?: string
+}
+
+export type BreadboardRailSegment = {
+  id: string
+  label: string
+  startColumn: number
+  endColumn: number
+  rowIds?: string[]
+}
+
+export type BreadboardPointDescriptor = {
+  id: string
+  label: string
+}
+
+export type BreadboardRegionTemplate = {
   id: string
   name: string
+  kind: BreadboardRegionKind
+  pointKind: PartPointKind
+  rows: BreadboardPointDescriptor[]
+  columnCount: number
+  defaultAnchors: PartRegionAnchor[]
+  railSegments?: BreadboardRailSegment[]
+}
+
+export type BreadboardTemplate = {
+  id: string
+  name: string
+  columnCount: number
+  regions: BreadboardRegionTemplate[]
+}
+
+export type RegionCalibration = {
+  regionId: string
+  anchors: PartRegionAnchor[]
+  rowOffsets: Record<string, Position>
+  columnOffsets: Record<string, Position>
+  pointOffsets: Record<string, Position>
+}
+
+export type CalibrationState = {
+  templateId: string
+  columnCount: number
+  regions: Record<string, RegionCalibration>
+}
+
+export type BreadboardRegion = {
+  id: string
+  name: string
+  kind: BreadboardRegionKind
   pointIds: string[]
   rows: PartAxisGroup[]
   columns: PartAxisGroup[]
@@ -36,16 +92,22 @@ export type PartRegion = {
   defaultAnchors: PartRegionAnchor[]
 }
 
+export type PartPoint = ConnectionPoint
+
+export type PartRegion = BreadboardRegion
+
 export type PartDefinition = {
   id: string
   name: string
   imageSrc: string
   imageWidth: number
   imageHeight: number
-  points: PartPoint[]
+  points: ConnectionPoint[]
   metadata: {
     kind: PartKind
-    regions?: PartRegion[]
+    regions?: BreadboardRegion[]
+    template?: BreadboardTemplate
+    calibration?: CalibrationState
   }
 }
 

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { PartEditor } from './PartEditor'
@@ -31,5 +31,23 @@ describe('PartEditor', () => {
 
     expect(image).toHaveAttribute('width', '1788')
     expect(image).toHaveAttribute('height', '659')
+  })
+
+  it('shows calibration controls for the generated breadboard template', () => {
+    const { container } = render(
+      <PartEditor
+        imageSrc="/board.png"
+        imageWidth={1200}
+        imageHeight={420}
+        imageName="main-board"
+        onReplaceImage={vi.fn()}
+      />,
+    )
+
+    const view = within(container)
+
+    expect(view.getAllByRole('button', { name: /save aligned definition/i }).length).toBeGreaterThan(0)
+    expect(view.getAllByText(/top power rails/i).length).toBeGreaterThan(0)
+    expect(view.getByRole('button', { name: /upper terminal strip top left anchor/i })).toBeInTheDocument()
   })
 })
