@@ -16,10 +16,10 @@
   z-index: 10;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px 16px;
-  padding: 8px 12px;
+  gap: 6px 10px;
+  padding: 6px 10px;
   background: rgba(244, 239, 228, 0.96);
   border-bottom: 1px solid rgba(114, 88, 39, 0.18);
   backdrop-filter: blur(8px);
@@ -28,9 +28,9 @@
 .image-workspace__title-block {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
-  flex: 1 1 240px;
+  flex: 1 1 100%;
 }
 
 .image-workspace__eyebrow,
@@ -50,7 +50,7 @@
 }
 
 .image-workspace__status {
-  font-size: 0.88rem;
+  font-size: 0.84rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -58,50 +58,73 @@
 
 .image-workspace__actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: flex-start;
+  width: 100%;
+}
+
+.image-workspace__actions > .action-button {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  white-space: nowrap;
 }
 
 .alignment-panel {
   display: grid;
-  gap: 14px;
-  min-width: min(100%, 36rem);
-  max-width: 42rem;
-  padding: 12px 14px;
-  border-radius: 16px;
+  grid-template-columns: minmax(13rem, 1.25fr) minmax(11rem, 1fr) minmax(11rem, 1fr) minmax(10rem, auto);
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  padding: 8px 10px;
+  border-radius: 14px;
   background: rgba(255, 251, 244, 0.92);
   border: 1px solid rgba(176, 128, 38, 0.18);
+  align-items: start;
 }
 
 .alignment-panel__intro {
   display: grid;
-  gap: 4px;
+  gap: 2px;
 }
 
 .alignment-panel__groups {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
+  grid-column: 2 / 4;
 }
 
 .alignment-panel__buttons,
 .alignment-panel__footer {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+}
+
+.alignment-panel__buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .alignment-panel__footer {
-  justify-content: flex-end;
+  justify-content: stretch;
+  align-content: start;
+  flex-direction: column;
+  grid-column: 4;
+}
+
+.alignment-panel__footer .action-button {
+  width: 100%;
 }
 
 .control-cluster {
   display: grid;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 14px;
+  gap: 6px;
+  padding: 8px 9px;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.62);
   border: 1px solid rgba(176, 128, 38, 0.14);
 }
@@ -126,8 +149,8 @@
 
 .control-guide__body {
   margin: 0;
-  font-size: 0.84rem;
-  line-height: 1.4;
+  font-size: 0.76rem;
+  line-height: 1.22;
   color: var(--text-muted);
 }
 
@@ -159,7 +182,7 @@
 
 .control-group__value {
   margin: -2px 0 0;
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   color: var(--text-muted);
 }
 
@@ -167,7 +190,7 @@
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
-  padding: 8px;
+  padding: 4px 8px 8px;
   box-sizing: border-box;
   overflow-x: hidden;
   overflow-y: auto;
@@ -175,14 +198,16 @@
 
 .image-stage {
   width: 100%;
-  display: block;
+  display: flex;
+  justify-content: center;
 }
 
 .image-stage__svg {
   display: block;
-  width: 100%;
+  width: auto;
   height: auto;
   max-width: 100%;
+  max-height: calc(100vh - 17rem);
   overflow: visible;
   cursor: default;
   outline: none;
@@ -233,8 +258,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 36px;
-  padding: 6px 14px;
+  min-height: 34px;
+  padding: 6px 12px;
   border: 0;
   border-radius: 999px;
   background: linear-gradient(135deg, #ca7b16, #e8a437);
@@ -277,14 +302,31 @@
   .image-workspace__actions {
     width: 100%;
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .alignment-panel {
     width: 100%;
+    grid-template-columns: 1fr;
   }
 
   .alignment-panel__groups {
     grid-template-columns: 1fr;
+    grid-column: auto;
+  }
+
+  .alignment-panel__footer {
+    grid-column: auto;
+    flex-direction: row;
+    justify-content: flex-start;
+  }
+
+  .alignment-panel__buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .alignment-panel__footer .action-button {
+    width: auto;
   }
 
   .action-button {
