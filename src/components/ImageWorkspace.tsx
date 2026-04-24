@@ -135,8 +135,8 @@ export function ImageWorkspace({
     const stageY = ((event.clientY - rect.top) / rect.height) * layout.height
 
     onStagePointSelect({
-      x: stageX / layout.width,
-      y: stageY / layout.height,
+      x: stageX,
+      y: stageY,
     })
   }
 
@@ -207,8 +207,8 @@ export function ImageWorkspace({
                 <circle
                   key={`${point.x}-${point.y}-${index}`}
                   className="image-stage__marker"
-                  cx={point.x * layout.width}
-                  cy={point.y * layout.height}
+                  cx={point.x}
+                  cy={point.y}
                   r={Math.max(layout.width, layout.height) * 0.008}
                 />
               ))}

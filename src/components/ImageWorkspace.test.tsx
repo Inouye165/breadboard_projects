@@ -59,12 +59,12 @@ describe('ImageWorkspace', () => {
     fireEvent.click(stage, { clientX: 100, clientY: 100 })
 
     expect(onStagePointSelect).toHaveBeenCalledTimes(1)
-    expect(onStagePointSelect).toHaveBeenLastCalledWith({ x: 0.1, y: 0.2 })
+    expect(onStagePointSelect).toHaveBeenLastCalledWith({ x: 100, y: 100 })
 
     fireEvent.click(stage, { clientX: 600, clientY: 125 })
 
     expect(onStagePointSelect).toHaveBeenCalledTimes(2)
-    expect(onStagePointSelect).toHaveBeenLastCalledWith({ x: 0.6, y: 0.25 })
+    expect(onStagePointSelect).toHaveBeenLastCalledWith({ x: 600, y: 125 })
   })
 
   it('shows only the temporary alignment markers rather than pin or grid overlays', async () => {
