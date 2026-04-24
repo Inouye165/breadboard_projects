@@ -84,4 +84,39 @@ describe('App', () => {
 
     expect(mockedApi.uploadWorkspaceImage.mock.calls[0][0]).toBe(file)
   })
+
+  it('does not over-rotate when re-aligning an image that is already horizontally aligned on screen', async () => {
+    mockedApi.loadSavedWorkspace.mockResolvedValue(savedWorkspace)
+
+    render(<App />)
+
+    const alignButton = await screen.findByRole('button', { name: /align horizontally/i })
+    const stage = await screen.findByRole('img', { name: /breadboard image board.png/i })
+
+    Object.defineProperty(stage, 'getBoundingClientRect', {
+      value: () => ({
+        left: 0,
+        top: 0,
+        width: 1200,
+        height: 600,
+      }),
+    })
+
+    fireEvent.click(alignButton)
+    fireEvent.click(stage, { clientX: 200, clientY: 220 })
+    fireEvent.click(stage, { clientX: 1000, clientY: 220 })
+
+    fireEvent.click(screen.getByRole('button', { name: /save alignment/i }))
+
+    await waitFor(() => {
+      expect(mockedApi.saveWorkspace).toHaveBeenCalled()
+    })
+
+    const lastSavedWorkspace = mockedApi.saveWorkspace.mock.calls.at(-1)?.[0]
+
+    expect(lastSavedWorkspace?.alignment.rotationDegrees).toBeCloseTo(
+      savedWorkspace.alignment.rotationDegrees,
+      10,
+    )
+  })
 })

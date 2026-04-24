@@ -133,21 +133,10 @@ export function ImageWorkspace({
 
     const stageX = ((event.clientX - rect.left) / rect.width) * layout.width
     const stageY = ((event.clientY - rect.top) / rect.height) * layout.height
-    const imageX = stageX - layout.offsetX
-    const imageY = stageY - layout.offsetY
-    const centerX = imageDimensions.width / 2
-    const centerY = imageDimensions.height / 2
-    const unrotatedPoint = rotatePoint(
-      imageX,
-      imageY,
-      centerX,
-      centerY,
-      (-rotationDegrees * Math.PI) / 180,
-    )
 
     onStagePointSelect({
-      x: unrotatedPoint.x / imageDimensions.width,
-      y: unrotatedPoint.y / imageDimensions.height,
+      x: stageX / layout.width,
+      y: stageY / layout.height,
     })
   }
 
@@ -213,16 +202,16 @@ export function ImageWorkspace({
                   height={imageDimensions.height}
                   preserveAspectRatio="none"
                 />
-                {pendingPoints.map((point, index) => (
-                  <circle
-                    key={`${point.x}-${point.y}-${index}`}
-                    className="image-stage__marker"
-                    cx={point.x * imageDimensions.width}
-                    cy={point.y * imageDimensions.height}
-                    r={Math.max(imageDimensions.width, imageDimensions.height) * 0.008}
-                  />
-                ))}
               </g>
+              {pendingPoints.map((point, index) => (
+                <circle
+                  key={`${point.x}-${point.y}-${index}`}
+                  className="image-stage__marker"
+                  cx={point.x * layout.width}
+                  cy={point.y * layout.height}
+                  r={Math.max(layout.width, layout.height) * 0.008}
+                />
+              ))}
             </svg>
           </div>
         ) : (
