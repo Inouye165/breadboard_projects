@@ -1,9 +1,9 @@
 .app-shell {
-  height: 100vh;
+  min-height: 100vh;
   padding: 20px;
   display: grid;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .eyebrow,
@@ -119,6 +119,21 @@
   border: 1px solid rgba(161, 125, 64, 0.12);
   box-shadow: 0 14px 30px rgba(90, 68, 31, 0.08);
   pointer-events: auto;
+}
+
+.workspace-panel--breadboard-empty > .panel-heading {
+  position: static;
+  display: flex;
+  padding: 18px 18px 0;
+  pointer-events: auto;
+}
+
+.workspace-panel--breadboard-empty > .panel-heading > div {
+  max-width: none;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
 }
 
 .workspace-panel--breadboard > .panel-heading .panel-kicker {
@@ -276,7 +291,7 @@
 
 .breadboard-stage {
   position: relative;
-  display: grid;
+  display: flex;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -284,6 +299,8 @@
 
 .breadboard-toolbar {
   display: flex;
+  gap: 10px;
+  align-items: center;
   justify-content: flex-end;
   flex-shrink: 0;
 }
@@ -297,32 +314,199 @@
 }
 
 .breadboard-media {
-  grid-area: 1 / 1;
+  flex: 1 1 auto;
   height: 100%;
   min-height: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: stretch;
   overflow: hidden;
-  padding: 0 112px 0 146px;
+  padding: 18px;
 }
 
-.breadboard-image {
+.part-editor {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 18px;
+  width: 100%;
+  min-height: 0;
+  outline: none;
+}
+
+.part-editor__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255, 252, 244, 0.92);
+  border: 1px solid rgba(137, 96, 20, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  overflow: auto;
+}
+
+.part-editor__group {
+  display: grid;
+  gap: 10px;
+}
+
+.part-editor__title {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.part-editor__copy,
+.part-editor__hint,
+.part-editor__status,
+.part-editor__selection,
+.part-editor__zoom-label {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.part-editor__label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.part-editor__select,
+.part-editor__input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(137, 96, 20, 0.14);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-strong);
+}
+
+.part-editor__button-grid,
+.part-editor__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.part-editor__button-grid--anchors .ghost-button {
+  flex: 1 1 140px;
+}
+
+.part-editor__canvas-shell {
+  min-width: 0;
+  min-height: 0;
+  border-radius: 22px;
+  border: 1px solid rgba(137, 96, 20, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 240, 228, 0.94));
+  overflow: auto;
+  padding: 16px;
+}
+
+.part-canvas {
+  width: 100%;
+  height: 100%;
+  min-height: 540px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.part-canvas__bounding-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.part-canvas__content {
+  position: relative;
   display: block;
-  width: auto;
-  height: auto;
-  max-width: none;
-  max-height: none;
+}
+
+.part-canvas__image {
+  display: block;
+  width: 100%;
+  height: 100%;
   border-radius: 14px;
   box-shadow: 0 16px 30px rgba(70, 63, 45, 0.12);
   background: rgba(255, 255, 255, 0.9);
-  transform: rotate(90deg);
-  transform-origin: center;
+}
+
+.part-canvas__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.part-canvas__point {
+  fill: rgba(255, 255, 255, 0.18);
+  stroke: rgba(217, 136, 22, 0);
+  stroke-width: 2;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    fill 120ms ease,
+    stroke 120ms ease,
+    r 120ms ease;
+}
+
+.part-canvas__point--visible {
+  fill: rgba(255, 255, 255, 0.28);
+  stroke: rgba(212, 132, 23, 0.42);
+  opacity: 0.78;
+}
+
+.part-canvas__point--selected {
+  fill: rgba(255, 236, 201, 0.96);
+  stroke: rgba(188, 101, 0, 1);
+  opacity: 1;
+}
+
+.part-canvas__point-hit {
+  fill: rgba(255, 255, 255, 0.001);
+  stroke: transparent;
+  cursor: crosshair;
+}
+
+.part-canvas__label {
+  fill: #5f5139;
+  font-size: 12px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: rgba(255, 252, 244, 0.92);
+  stroke-width: 3px;
+  pointer-events: none;
+}
+
+.ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 14px;
+  border: 1px solid rgba(176, 128, 38, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 251, 244, 0.72);
+  color: var(--accent-strong);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(104, 77, 31, 0.08);
+}
+
+.ghost-button--active {
+  background: rgba(247, 222, 176, 0.7);
+  border-color: rgba(185, 107, 0, 0.28);
 }
 
 .breadboard-prompt {
   width: min(100%, 480px);
   padding: 22px;
+  margin: 18px;
   border-radius: 24px;
   background: rgba(255, 252, 244, 0.9);
   border: 1px dashed rgba(127, 92, 24, 0.28);
@@ -454,7 +638,8 @@
     pointer-events: auto;
   }
 
-  .workspace-panel--breadboard > .panel-heading > div {
+  .workspace-panel--breadboard > .panel-heading > div,
+  .workspace-panel--breadboard-empty > .panel-heading > div {
     max-width: none;
     padding: 0;
     background: transparent;
@@ -473,6 +658,14 @@
 
   .breadboard-media {
     padding: 12px;
+  }
+
+  .part-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .part-canvas {
+    min-height: 420px;
   }
 }
 

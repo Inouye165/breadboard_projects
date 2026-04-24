@@ -266,7 +266,9 @@ function App() {
           </section>
         </section>
 
-        <section className="workspace-panel workspace-panel--primary workspace-panel--breadboard">
+        <section
+          className={`workspace-panel workspace-panel--primary workspace-panel--breadboard${imageSrc ? '' : ' workspace-panel--breadboard-empty'}`}
+        >
           <div className="panel-heading">
             <div>
               <p className="panel-kicker">Breadboard View</p>
@@ -276,7 +278,7 @@ function App() {
               </span>
             </div>
           </div>
-          <BreadboardCanvas imageSrc={imageSrc} onImageSelected={handleImageSelected} />
+          <BreadboardCanvas imageSrc={imageSrc} imageName={imageName} onImageSelected={handleImageSelected} />
         </section>
       </section>
     </main>
