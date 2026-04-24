@@ -108,6 +108,7 @@ export type PartDefinition = {
     regions?: BreadboardRegion[]
     template?: BreadboardTemplate
     calibration?: CalibrationState
+    displayRotationDegrees?: 0 | 90 | 180 | 270
   }
 }
 

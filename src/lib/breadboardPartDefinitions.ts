@@ -47,6 +47,14 @@ function cloneAnchors(anchors: PartRegionAnchor[]) {
   return anchors.map((anchor) => ({ ...anchor }))
 }
 
+function translateAnchors(anchors: PartRegionAnchor[], dx: number, dy: number) {
+  return anchors.map((anchor) => ({
+    ...anchor,
+    x: clampNormalized(anchor.x + dx),
+    y: clampNormalized(anchor.y + dy),
+  }))
+}
+
 function rotatePosition(x: number, y: number, centerX: number, centerY: number, radians: number) {
   const translatedX = x - centerX
   const translatedY = y - centerY
@@ -554,13 +562,48 @@ export function moveBreadboardRegion(
       ...calibration.regions,
       [regionId]: {
         ...currentCalibration,
-        anchors: currentCalibration.anchors.map((anchor) => ({
-          ...anchor,
-          x: clampNormalized(anchor.x + dx),
-          y: clampNormalized(anchor.y + dy),
-        })),
+        anchors: translateAnchors(currentCalibration.anchors, dx, dy),
       },
     },
+  })
+}
+
+export function moveBreadboardAllRegions(definition: PartDefinition, dx: number, dy: number) {
+  if (!definition.metadata.template || !definition.metadata.calibration) {
+    const movedDefinition = updatePartPoints(definition, definition.points.map((point) => point.id), (point) => ({
+      ...point,
+      x: point.x + dx,
+      y: point.y + dy,
+    }))
+
+    return {
+      ...movedDefinition,
+      metadata: {
+        ...movedDefinition.metadata,
+        regions: movedDefinition.metadata.regions?.map((region) => ({
+          ...region,
+          anchors: translateAnchors(region.anchors, dx, dy),
+        })),
+      },
+    }
+  }
+
+  const template = getTemplate(definition)
+  const calibration = getCalibration(definition, template)
+  const nextRegions = { ...calibration.regions }
+
+  template.regions.forEach((regionTemplate) => {
+    const currentCalibration = getRegionCalibration(regionTemplate, calibration)
+
+    nextRegions[regionTemplate.id] = {
+      ...currentCalibration,
+      anchors: translateAnchors(currentCalibration.anchors, dx, dy),
+    }
+  })
+
+  return rebuildBreadboardDefinition(definition, {
+    ...calibration,
+    regions: nextRegions,
   })
 }
 

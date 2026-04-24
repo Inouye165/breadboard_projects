@@ -434,7 +434,6 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%) rotate(90deg);
   transform-origin: center center;
 }
 
@@ -472,6 +471,15 @@
   cursor: grab;
 }
 
+.part-canvas__board-hit {
+  pointer-events: none;
+}
+
+.part-canvas__board-hit--active {
+  pointer-events: auto;
+  cursor: grab;
+}
+
 .part-canvas__guide {
   fill: none;
   stroke-width: 2;
@@ -489,14 +497,15 @@
 }
 
 .part-canvas__anchor {
-  fill: rgba(255, 245, 235, 0.98);
-  stroke: rgba(223, 53, 53, 0.9);
-  stroke-width: 2.5;
+  fill: rgba(255, 250, 244, 0.96);
+  stroke: rgba(195, 80, 30, 0.96);
+  stroke-width: 2.25;
   pointer-events: none;
 }
 
 .part-canvas__anchor--selected {
-  fill: rgba(255, 236, 201, 0.98);
+  fill: rgba(255, 239, 210, 0.98);
+  stroke: rgba(168, 84, 0, 0.98);
 }
 
 .part-canvas__anchor-hit {
@@ -506,9 +515,9 @@
 }
 
 .part-canvas__point {
-  fill: rgba(255, 255, 255, 0.18);
-  stroke: rgba(217, 136, 22, 0);
-  stroke-width: 2;
+  fill: rgba(194, 123, 20, 0.1);
+  stroke: rgba(171, 113, 27, 0);
+  stroke-width: 1.5;
   opacity: 0;
   transition:
     opacity 120ms ease,
@@ -518,13 +527,21 @@
 }
 
 .part-canvas__point--visible {
-  fill: rgba(228, 36, 36, 0.9);
-  stroke: rgba(255, 255, 255, 0.92);
   opacity: 1;
 }
 
+.part-canvas__point--debug {
+  fill: rgba(188, 124, 22, 0.55);
+  stroke: rgba(255, 251, 242, 0.72);
+}
+
+.part-canvas__point--highlighted {
+  fill: rgba(34, 132, 167, 0.92);
+  stroke: rgba(240, 250, 255, 0.98);
+}
+
 .part-canvas__point--selected {
-  fill: rgba(255, 78, 78, 1);
+  fill: rgba(214, 74, 32, 0.98);
   stroke: rgba(255, 255, 255, 1);
   opacity: 1;
 }
