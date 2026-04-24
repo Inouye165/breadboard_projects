@@ -8,6 +8,17 @@ export function isPortrait(width: number, height: number): boolean {
   return height > width
 }
 
+function getRotationBounds(width: number, height: number, rotationDegrees: number) {
+  const angleRadians = (rotationDegrees * Math.PI) / 180
+  const cos = Math.abs(Math.cos(angleRadians))
+  const sin = Math.abs(Math.sin(angleRadians))
+
+  return {
+    width: Math.ceil(width * cos + height * sin),
+    height: Math.ceil(width * sin + height * cos),
+  }
+}
+
 function decodeImageFromBlob(file: Blob, timeoutMs = 4000): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
@@ -138,6 +149,51 @@ export async function ensureLandscapeFile(file: File): Promise<File> {
     }
 
     return await rotateImageNinetyDegreesClockwise(image, file.name, file.type)
+  } catch {
+    return file
+  }
+}
+
+export async function rotateImageFile(file: File, rotationDegrees: number): Promise<File> {
+  if (!canRotateInCurrentEnvironment() || Math.abs(rotationDegrees) < 0.0001) {
+    return file
+  }
+
+  try {
+    const image = await decodeImageFromBlob(file)
+    const { width, height } = getRotationBounds(
+      image.naturalWidth,
+      image.naturalHeight,
+      rotationDegrees,
+    )
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+
+    const context = canvas.getContext('2d')
+
+    if (!context) {
+      return file
+    }
+
+    if ((file.type || 'image/jpeg') === 'image/jpeg') {
+      context.fillStyle = '#ffffff'
+      context.fillRect(0, 0, width, height)
+    }
+
+    context.translate(width / 2, height / 2)
+    context.rotate((rotationDegrees * Math.PI) / 180)
+    context.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2)
+
+    const rotatedBlob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, file.type || 'image/jpeg', 0.92)
+    })
+
+    if (!rotatedBlob) {
+      return file
+    }
+
+    return new File([rotatedBlob], file.name, { type: rotatedBlob.type || file.type })
   } catch {
     return file
   }

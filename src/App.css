@@ -63,6 +63,32 @@
   justify-content: flex-end;
 }
 
+.control-group {
+  display: grid;
+  gap: 4px;
+  min-width: 140px;
+}
+
+.control-group__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.control-group__slider,
+.control-group__input {
+  width: 100%;
+}
+
+.control-group__input {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid rgba(176, 128, 38, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 251, 244, 0.96);
+  color: inherit;
+}
+
 .image-workspace__stage-shell {
   flex: 1 1 auto;
   min-height: 0;
@@ -91,10 +117,10 @@
   transform-origin: center;
 }
 
-.image-stage__marker {
-  fill: rgba(201, 87, 28, 0.92);
-  stroke: rgba(255, 251, 244, 0.95);
-  stroke-width: 4;
+.image-stage__guide-line {
+  stroke: rgba(201, 87, 28, 0.92);
+  stroke-width: 3;
+  stroke-dasharray: 18 10;
   pointer-events: none;
 }
 

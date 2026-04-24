@@ -1,21 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 
-import type { AlignmentPoint } from '../lib/imageAlignment'
-
 type ImageWorkspaceProps = {
   imageName?: string
   imagePath?: string
   rotationDegrees: number
-  pendingPoints: AlignmentPoint[]
-  isAlignmentMode: boolean
+  guideLinePercent: number
+  rotationInput: string
   isBusy?: boolean
   isSaveDisabled?: boolean
   status: string
   onUploadRequest: () => void
-  onEnterAlignmentMode: () => void
+  onGuideLineChange: (value: number) => void
+  onRotationInputChange: (value: string) => void
+  onApplyRotation: () => void
   onResetAlignment: () => void
   onSaveAlignment: () => void
-  onStagePointSelect: (point: AlignmentPoint) => void
 }
 
 type ImageDimensions = {
@@ -71,22 +70,24 @@ export function ImageWorkspace({
   imageName,
   imagePath,
   rotationDegrees,
-  pendingPoints,
-  isAlignmentMode,
+  guideLinePercent,
+  rotationInput,
   isBusy = false,
   isSaveDisabled = false,
   status,
   onUploadRequest,
-  onEnterAlignmentMode,
+  onGuideLineChange,
+  onRotationInputChange,
+  onApplyRotation,
   onResetAlignment,
   onSaveAlignment,
-  onStagePointSelect,
 }: ImageWorkspaceProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [imageDimensions, setImageDimensions] = useState<ImageDimensions>()
   const layout = imageDimensions
     ? getRotatedLayout(imageDimensions.width, imageDimensions.height, rotationDegrees)
     : undefined
+  const guideLineY = layout ? (guideLinePercent / 100) * layout.height : 0
 
   useEffect(() => {
     if (!imagePath) {
@@ -120,26 +121,6 @@ export function ImageWorkspace({
     }
   }, [imagePath])
 
-  function handleStageClick(event: React.MouseEvent<SVGSVGElement>) {
-    if (!isAlignmentMode || !imageDimensions || !layout) {
-      return
-    }
-
-    const rect = event.currentTarget.getBoundingClientRect()
-
-    if (rect.width <= 0 || rect.height <= 0) {
-      return
-    }
-
-    const stageX = ((event.clientX - rect.left) / rect.width) * layout.width
-    const stageY = ((event.clientY - rect.top) / rect.height) * layout.height
-
-    onStagePointSelect({
-      x: stageX,
-      y: stageY,
-    })
-  }
-
   return (
     <section className="image-workspace" aria-label="Image alignment workspace">
       <header className="image-workspace__header">
@@ -153,13 +134,39 @@ export function ImageWorkspace({
               Replace image
             </button>
           ) : null}
+          <label className="control-group" htmlFor="guide-line-position">
+            <span className="control-group__label">Guide line</span>
+            <input
+              id="guide-line-position"
+              className="control-group__slider"
+              type="range"
+              min="0"
+              max="100"
+              step="0.5"
+              value={guideLinePercent}
+              onChange={(event) => onGuideLineChange(Number.parseFloat(event.target.value))}
+              disabled={!imagePath || isBusy}
+            />
+          </label>
+          <label className="control-group" htmlFor="rotation-amount">
+            <span className="control-group__label">Rotate by deg</span>
+            <input
+              id="rotation-amount"
+              className="control-group__input"
+              type="number"
+              step="0.01"
+              value={rotationInput}
+              onChange={(event) => onRotationInputChange(event.target.value)}
+              disabled={!imagePath || isBusy}
+            />
+          </label>
           <button
             type="button"
-            className={`action-button${isAlignmentMode ? ' action-button--active' : ''}`}
-            onClick={onEnterAlignmentMode}
+            className="action-button"
+            onClick={onApplyRotation}
             disabled={!imagePath || isBusy}
           >
-            Align horizontally
+            Apply rotation
           </button>
           <button
             type="button"
@@ -190,8 +197,14 @@ export function ImageWorkspace({
               viewBox={`0 0 ${layout.width} ${layout.height}`}
               role="img"
               aria-label={imageName ? `Breadboard image ${imageName}` : 'Breadboard image'}
-              onClick={handleStageClick}
             >
+              <line
+                className="image-stage__guide-line"
+                x1="0"
+                y1={guideLineY}
+                x2={layout.width}
+                y2={guideLineY}
+              />
               <g
                 className="image-stage__transform"
                 transform={`translate(${layout.offsetX} ${layout.offsetY}) rotate(${rotationDegrees} ${imageDimensions.width / 2} ${imageDimensions.height / 2})`}
@@ -203,15 +216,6 @@ export function ImageWorkspace({
                   preserveAspectRatio="none"
                 />
               </g>
-              {pendingPoints.map((point, index) => (
-                <circle
-                  key={`${point.x}-${point.y}-${index}`}
-                  className="image-stage__marker"
-                  cx={point.x}
-                  cy={point.y}
-                  r={Math.max(layout.width, layout.height) * 0.008}
-                />
-              ))}
             </svg>
           </div>
         ) : (

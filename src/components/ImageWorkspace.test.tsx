@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 
 import { ImageWorkspace } from './ImageWorkspace'
@@ -26,61 +26,47 @@ afterEach(() => {
 })
 
 describe('ImageWorkspace', () => {
-  it('requires two clicks in alignment mode before the transform is updated', async () => {
-    const onStagePointSelect = vi.fn()
-
+  it('renders the guide line and manual rotation controls', async () => {
     render(
       <ImageWorkspace
         imageName="board.png"
         imagePath="/board.png"
         rotationDegrees={0}
-        pendingPoints={[]}
-        isAlignmentMode
-        status="Pick two points"
+        guideLinePercent={25}
+        rotationInput="0.25"
+        status="Adjust manually"
         onUploadRequest={vi.fn()}
-        onEnterAlignmentMode={vi.fn()}
+        onGuideLineChange={vi.fn()}
+        onRotationInputChange={vi.fn()}
+        onApplyRotation={vi.fn()}
         onResetAlignment={vi.fn()}
         onSaveAlignment={vi.fn()}
-        onStagePointSelect={onStagePointSelect}
       />,
     )
 
     const stage = await screen.findByRole('img', { name: /breadboard image board.png/i })
 
-    Object.defineProperty(stage, 'getBoundingClientRect', {
-      value: () => ({
-        left: 0,
-        top: 0,
-        width: 1000,
-        height: 500,
-      }),
-    })
-
-    fireEvent.click(stage, { clientX: 100, clientY: 100 })
-
-    expect(onStagePointSelect).toHaveBeenCalledTimes(1)
-    expect(onStagePointSelect).toHaveBeenLastCalledWith({ x: 100, y: 100 })
-
-    fireEvent.click(stage, { clientX: 600, clientY: 125 })
-
-    expect(onStagePointSelect).toHaveBeenCalledTimes(2)
-    expect(onStagePointSelect).toHaveBeenLastCalledWith({ x: 600, y: 125 })
+    expect(stage.querySelector('.image-stage__guide-line')).toBeTruthy()
+    expect(screen.getByLabelText(/guide line/i)).toBeTruthy()
+    expect(screen.getByLabelText(/rotate by deg/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /apply rotation/i })).toBeTruthy()
   })
 
-  it('shows only the temporary alignment markers rather than pin or grid overlays', async () => {
+  it('does not render pin or grid overlays', async () => {
     const { container } = render(
       <ImageWorkspace
         imageName="board.png"
         imagePath="/board.png"
         rotationDegrees={0}
-        pendingPoints={[{ x: 0.25, y: 0.5 }]}
-        isAlignmentMode
-        status="Pick two points"
+        guideLinePercent={50}
+        rotationInput="0.5"
+        status="Adjust manually"
         onUploadRequest={vi.fn()}
-        onEnterAlignmentMode={vi.fn()}
+        onGuideLineChange={vi.fn()}
+        onRotationInputChange={vi.fn()}
+        onApplyRotation={vi.fn()}
         onResetAlignment={vi.fn()}
         onSaveAlignment={vi.fn()}
-        onStagePointSelect={vi.fn()}
       />,
     )
 
@@ -88,7 +74,6 @@ describe('ImageWorkspace', () => {
       expect(screen.getByRole('img', { name: /breadboard image board.png/i })).toBeTruthy()
     })
 
-    expect(container.querySelectorAll('.image-stage__marker')).toHaveLength(1)
     expect(screen.queryByRole('button', { name: /connection point/i })).toBeNull()
     expect(container.querySelector('.part-canvas__overlay')).toBeNull()
   })
@@ -99,14 +84,15 @@ describe('ImageWorkspace', () => {
         imageName="board.png"
         imagePath="/board.png"
         rotationDegrees={0}
-        pendingPoints={[]}
-        isAlignmentMode={false}
+        guideLinePercent={25}
+        rotationInput="0.25"
         status="Saved image loaded"
         onUploadRequest={vi.fn()}
-        onEnterAlignmentMode={vi.fn()}
+        onGuideLineChange={vi.fn()}
+        onRotationInputChange={vi.fn()}
+        onApplyRotation={vi.fn()}
         onResetAlignment={vi.fn()}
         onSaveAlignment={vi.fn()}
-        onStagePointSelect={vi.fn()}
       />,
     )
 

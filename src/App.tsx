@@ -2,13 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 
 import './App.css'
 import { ImageWorkspace } from './components/ImageWorkspace'
-import {
-  calculateHorizontalAlignmentRotation,
-  createDefaultAlignment,
-  type AlignmentPoint,
-  type SavedWorkspace,
-} from './lib/imageAlignment'
-import { ensureLandscapeFile } from './lib/imageOrientation'
+import { createDefaultAlignment, type SavedWorkspace } from './lib/imageAlignment'
+import { ensureLandscapeFile, rotateImageFile } from './lib/imageOrientation'
 import { loadSavedWorkspace, saveWorkspace, uploadWorkspaceImage } from './lib/imageWorkspaceApi'
 
 function alignmentsMatch(left: SavedWorkspace['alignment'], right: SavedWorkspace['alignment']) {
@@ -20,8 +15,8 @@ function App() {
   const normalizedImagePathsRef = useRef<Set<string>>(new Set())
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null)
   const [draftAlignment, setDraftAlignment] = useState(createDefaultAlignment())
-  const [pendingPoints, setPendingPoints] = useState<AlignmentPoint[]>([])
-  const [isAlignmentMode, setIsAlignmentMode] = useState(false)
+  const [guideLinePercent, setGuideLinePercent] = useState(25)
+  const [rotationInput, setRotationInput] = useState('0.25')
   const [isBusy, setIsBusy] = useState(true)
   const [status, setStatus] = useState('Loading saved image workspace...')
 
@@ -47,8 +42,8 @@ function App() {
         setDraftAlignment(savedWorkspace.alignment)
         setStatus(
           savedWorkspace.alignment.rotationDegrees === 0
-            ? 'Saved image loaded. Click Align horizontally to set the reference line.'
-            : 'Saved image and alignment loaded from local repo storage.',
+            ? 'Saved image loaded. Move the guide line, enter a rotation amount, and apply it until the image aligns.'
+            : 'Saved image loaded with a preview rotation. Fine tune it, then save to bake it into the image.',
         )
       } catch {
         if (isActive) {
@@ -142,8 +137,6 @@ function App() {
     }
 
     setIsBusy(true)
-    setIsAlignmentMode(false)
-    setPendingPoints([])
 
     try {
       const nextWorkspace = await uploadWorkspaceImage(file, fetch, ensureLandscapeFile)
@@ -151,7 +144,7 @@ function App() {
       normalizedImagePathsRef.current.add(nextWorkspace.imagePath)
       setWorkspace(nextWorkspace)
       setDraftAlignment(nextWorkspace.alignment)
-      setStatus('Image saved locally. Click Align horizontally to pick two reference points.')
+      setStatus('Image saved locally. Move the guide line, enter a rotation amount, and apply it until the image aligns.')
     } catch {
       setStatus('Could not save the selected image into local repo storage.')
     } finally {
@@ -159,49 +152,28 @@ function App() {
     }
   }
 
-  function handleEnterAlignmentMode() {
+  function handleApplyRotation() {
     if (!workspace) {
       return
     }
 
-    setPendingPoints([])
-    setIsAlignmentMode(true)
-    setStatus('Click two points on the image that should land on the same horizontal line.')
-  }
+    const rotationStep = Number.parseFloat(rotationInput)
 
-  function handleStagePointSelect(point: AlignmentPoint) {
-    if (!isAlignmentMode) {
+    if (!Number.isFinite(rotationStep) || rotationStep === 0) {
+      setStatus('Enter a positive or negative rotation amount in degrees before applying it.')
       return
     }
 
-    setPendingPoints((currentPoints) => {
-      if (currentPoints.length === 0) {
-        setStatus('First point selected. Click the second point to preview the horizontal rotation.')
-        return [point]
-      }
-
-      const referencePoints: [AlignmentPoint, AlignmentPoint] = [currentPoints[0], point]
-      const rotationAdjustment = calculateHorizontalAlignmentRotation(
-        referencePoints[0],
-        referencePoints[1],
-      )
-
-      setDraftAlignment((currentAlignment) => ({
-        rotationDegrees: currentAlignment.rotationDegrees + rotationAdjustment,
-        referencePoints,
-      }))
-      setIsAlignmentMode(false)
-      setStatus('Alignment preview updated. Save alignment to keep this rotation for future launches.')
-
-      return []
-    })
+    setDraftAlignment((currentAlignment) => ({
+      rotationDegrees: currentAlignment.rotationDegrees + rotationStep,
+      referencePoints: null,
+    }))
+    setStatus('Rotation preview updated. Save alignment to bake this rotation into the stored image.')
   }
 
   function handleResetAlignment() {
     setDraftAlignment(createDefaultAlignment())
-    setPendingPoints([])
-    setIsAlignmentMode(false)
-    setStatus('Alignment reset. You can re-enter alignment mode and choose two new points.')
+    setStatus('Rotation preview reset to the saved image orientation.')
   }
 
   async function handleSaveAlignment() {
@@ -212,16 +184,35 @@ function App() {
     setIsBusy(true)
 
     try {
-      const savedWorkspace = await saveWorkspace({
-        ...workspace,
-        alignment: draftAlignment,
-      })
+      if (Math.abs(draftAlignment.rotationDegrees) < 0.0001) {
+        const savedWorkspace = await saveWorkspace({
+          ...workspace,
+          alignment: createDefaultAlignment(),
+        })
 
-      setWorkspace(savedWorkspace)
-      setDraftAlignment(savedWorkspace.alignment)
-      setStatus('Alignment saved locally and will be restored automatically on the next app launch.')
+        setWorkspace(savedWorkspace)
+        setDraftAlignment(savedWorkspace.alignment)
+        setStatus('No preview rotation was pending, so the saved image is already current.')
+        return
+      }
+
+      const response = await fetch(workspace.imagePath)
+
+      if (!response.ok) {
+        throw new Error('Could not load the current image for rotation.')
+      }
+
+      const blob = await response.blob()
+      const sourceFile = new File([blob], workspace.imageName, { type: blob.type || 'image/jpeg' })
+      const rotatedFile = await rotateImageFile(sourceFile, draftAlignment.rotationDegrees)
+      const uploadedWorkspace = await uploadWorkspaceImage(rotatedFile, fetch, async (file) => file)
+
+      normalizedImagePathsRef.current.add(uploadedWorkspace.imagePath)
+      setWorkspace(uploadedWorkspace)
+      setDraftAlignment(createDefaultAlignment())
+      setStatus('Rotation saved into the image. Future app loads use the newly rotated file directly.')
     } catch {
-      setStatus('Could not save the alignment metadata.')
+      setStatus('Could not save the rotated image into local repo storage.')
     } finally {
       setIsBusy(false)
     }
@@ -241,16 +232,17 @@ function App() {
         imageName={workspace?.imageName}
         imagePath={workspace?.imagePath}
         rotationDegrees={draftAlignment.rotationDegrees}
-        pendingPoints={pendingPoints}
-        isAlignmentMode={isAlignmentMode}
+        guideLinePercent={guideLinePercent}
+        rotationInput={rotationInput}
         isBusy={isBusy}
         isSaveDisabled={!hasUnsavedAlignment}
         status={status}
         onUploadRequest={handleUploadRequest}
-        onEnterAlignmentMode={handleEnterAlignmentMode}
+        onGuideLineChange={setGuideLinePercent}
+        onRotationInputChange={setRotationInput}
+        onApplyRotation={handleApplyRotation}
         onResetAlignment={handleResetAlignment}
         onSaveAlignment={handleSaveAlignment}
-        onStagePointSelect={handleStagePointSelect}
       />
     </main>
   )
