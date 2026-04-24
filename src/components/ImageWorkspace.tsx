@@ -5,13 +5,15 @@ type ImageWorkspaceProps = {
   imagePath?: string
   rotationDegrees: number
   guideLinePercent: number
-  rotationInput: string
+  rotationStep: number
+  guideLineStep: number
   isBusy?: boolean
   isSaveDisabled?: boolean
   status: string
   onUploadRequest: () => void
   onGuideLineChange: (value: number) => void
-  onRotationInputChange: (value: string) => void
+  onRotationStepChange: (value: number) => void
+  onGuideLineStepChange: (value: number) => void
   onRotateLeft: (multiplier?: number) => void
   onRotateRight: (multiplier?: number) => void
   onNudgeGuideLine: (direction: -1 | 1, multiplier?: number) => void
@@ -73,13 +75,15 @@ export function ImageWorkspace({
   imagePath,
   rotationDegrees,
   guideLinePercent,
-  rotationInput,
+  rotationStep,
+  guideLineStep,
   isBusy = false,
   isSaveDisabled = false,
   status,
   onUploadRequest,
   onGuideLineChange,
-  onRotationInputChange,
+  onRotationStepChange,
+  onGuideLineStepChange,
   onRotateLeft,
   onRotateRight,
   onNudgeGuideLine,
@@ -179,70 +183,102 @@ export function ImageWorkspace({
               Replace image
             </button>
           ) : null}
-          <div className="control-guide">
-            <p className="control-guide__title">Live controls</p>
-            <p className="control-guide__body">
-              Click the image to focus it. Left and right arrows rotate by the step below. Up and down arrows move the guide line. Hold Shift for faster moves, or drag the guide line directly.
-            </p>
-          </div>
-          <label className="control-group" htmlFor="guide-line-position">
-            <span className="control-group__label">Guide line</span>
-            <input
-              id="guide-line-position"
-              className="control-group__slider"
-              type="range"
-              min="0"
-              max="100"
-              step="0.5"
-              value={guideLinePercent}
-              onChange={(event) => onGuideLineChange(Number.parseFloat(event.target.value))}
-              disabled={!imagePath || isBusy}
-            />
-          </label>
-          <label className="control-group" htmlFor="rotation-amount">
-            <span className="control-group__label">Rotation step (deg)</span>
-            <input
-              id="rotation-amount"
-              className="control-group__input"
-              type="number"
-              step="0.01"
-              value={rotationInput}
-              onChange={(event) => onRotationInputChange(event.target.value)}
-              disabled={!imagePath || isBusy}
-            />
-          </label>
-          <button
-            type="button"
-            className="action-button"
-            onClick={() => onRotateLeft()}
-            disabled={!imagePath || isBusy}
-          >
-            Rotate left
-          </button>
-          <button
-            type="button"
-            className="action-button"
-            onClick={() => onRotateRight()}
-            disabled={!imagePath || isBusy}
-          >
-            Rotate right
-          </button>
-          <button
-            type="button"
-            className="action-button action-button--ghost"
-            onClick={onResetAlignment}
-            disabled={!imagePath || isBusy}
-          >
-            Reset alignment
-          </button>
-          <button
-            type="button"
-            className="action-button"
-            onClick={onSaveAlignment}
-            disabled={isSaveDisabled || !imagePath || isBusy}
-          >
-            Save alignment
-          </button>
+          <section className="alignment-panel" aria-label="Alignment controls">
+            <div className="alignment-panel__intro">
+              <p className="control-guide__title">Live controls</p>
+              <p className="control-guide__body">
+                Click the image to focus it. Left and right arrows rotate the preview live. Up and down arrows move the guide line. Hold Shift for faster moves, or drag the guide line directly.
+              </p>
+            </div>
+            <div className="alignment-panel__groups">
+              <div className="control-cluster">
+                <p className="control-cluster__title">Guide line</p>
+                <label className="control-group" htmlFor="guide-line-position">
+                  <span className="control-group__label">Position</span>
+                  <input
+                    id="guide-line-position"
+                    className="control-group__slider"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    value={guideLinePercent}
+                    onChange={(event) => onGuideLineChange(Number.parseFloat(event.target.value))}
+                    disabled={!imagePath || isBusy}
+                  />
+                </label>
+                <label className="control-group" htmlFor="guide-line-step">
+                  <span className="control-group__label">Nudge step</span>
+                  <input
+                    id="guide-line-step"
+                    className="control-group__slider"
+                    type="range"
+                    min="0.05"
+                    max="5"
+                    step="0.05"
+                    value={guideLineStep}
+                    onChange={(event) => onGuideLineStepChange(Number.parseFloat(event.target.value))}
+                    disabled={!imagePath || isBusy}
+                  />
+                </label>
+                <p className="control-group__value">{guideLineStep.toFixed(2)}% per key press</p>
+              </div>
+              <div className="control-cluster">
+                <p className="control-cluster__title">Rotation</p>
+                <label className="control-group" htmlFor="rotation-step">
+                  <span className="control-group__label">Step size</span>
+                  <input
+                    id="rotation-step"
+                    className="control-group__slider"
+                    type="range"
+                    min="0.01"
+                    max="3"
+                    step="0.01"
+                    value={rotationStep}
+                    onChange={(event) => onRotationStepChange(Number.parseFloat(event.target.value))}
+                    disabled={!imagePath || isBusy}
+                  />
+                </label>
+                <p className="control-group__value">{rotationStep.toFixed(2)} deg per key press</p>
+                <div className="alignment-panel__buttons">
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={() => onRotateLeft()}
+                    disabled={!imagePath || isBusy}
+                  >
+                    Rotate left
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={() => onRotateRight()}
+                    disabled={!imagePath || isBusy}
+                  >
+                    Rotate right
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="alignment-panel__footer">
+              <button
+                type="button"
+                className="action-button action-button--ghost"
+                onClick={onResetAlignment}
+                disabled={!imagePath || isBusy}
+              >
+                Reset alignment
+              </button>
+              <button
+                type="button"
+                className="action-button"
+                onClick={onSaveAlignment}
+                disabled={isSaveDisabled || !imagePath || isBusy}
+              >
+                Save alignment
+              </button>
+            </div>
+          </section>
         </div>
       </header>
 
@@ -287,13 +323,6 @@ export function ImageWorkspace({
                   setIsDraggingGuideLine(true)
                   updateGuideLineFromPointer(event.clientY)
                 }}
-              />
-              <line
-                className="image-stage__guide-line-shadow"
-                x1="0"
-                y1={guideLineY}
-                x2={layout.width}
-                y2={guideLineY}
               />
               <line
                 className="image-stage__guide-line"

@@ -33,11 +33,13 @@ describe('ImageWorkspace', () => {
         imagePath="/board.png"
         rotationDegrees={0}
         guideLinePercent={25}
-        rotationInput="0.25"
+        rotationStep={0.25}
+        guideLineStep={0.5}
         status="Adjust manually"
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
-        onRotationInputChange={vi.fn()}
+        onRotationStepChange={vi.fn()}
+        onGuideLineStepChange={vi.fn()}
         onRotateLeft={vi.fn()}
         onRotateRight={vi.fn()}
         onNudgeGuideLine={vi.fn()}
@@ -49,8 +51,9 @@ describe('ImageWorkspace', () => {
     const stage = await screen.findByRole('img', { name: /breadboard image board.png/i })
 
     expect(stage.querySelector('.image-stage__guide-line')).toBeTruthy()
-    expect(screen.getByLabelText(/guide line/i)).toBeTruthy()
-    expect(screen.getByLabelText(/rotation step/i)).toBeTruthy()
+    expect(screen.getByLabelText(/position/i)).toBeTruthy()
+    expect(screen.getByLabelText(/nudge step/i)).toBeTruthy()
+    expect(screen.getByLabelText(/step size/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: /rotate left/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /rotate right/i })).toBeTruthy()
   })
@@ -62,11 +65,13 @@ describe('ImageWorkspace', () => {
         imagePath="/board.png"
         rotationDegrees={0}
         guideLinePercent={50}
-        rotationInput="0.5"
+        rotationStep={0.5}
+        guideLineStep={0.5}
         status="Adjust manually"
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
-        onRotationInputChange={vi.fn()}
+        onRotationStepChange={vi.fn()}
+        onGuideLineStepChange={vi.fn()}
         onRotateLeft={vi.fn()}
         onRotateRight={vi.fn()}
         onNudgeGuideLine={vi.fn()}
@@ -90,11 +95,13 @@ describe('ImageWorkspace', () => {
         imagePath="/board.png"
         rotationDegrees={0}
         guideLinePercent={25}
-        rotationInput="0.25"
+        rotationStep={0.25}
+        guideLineStep={0.5}
         status="Saved image loaded"
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
-        onRotationInputChange={vi.fn()}
+        onRotationStepChange={vi.fn()}
+        onGuideLineStepChange={vi.fn()}
         onRotateLeft={vi.fn()}
         onRotateRight={vi.fn()}
         onNudgeGuideLine={vi.fn()}
@@ -121,11 +128,13 @@ describe('ImageWorkspace', () => {
         imagePath="/board.png"
         rotationDegrees={0}
         guideLinePercent={25}
-        rotationInput="0.25"
+        rotationStep={0.25}
+        guideLineStep={0.5}
         status="Saved image loaded"
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
-        onRotationInputChange={vi.fn()}
+        onRotationStepChange={vi.fn()}
+        onGuideLineStepChange={vi.fn()}
         onRotateLeft={onRotateLeft}
         onRotateRight={onRotateRight}
         onNudgeGuideLine={onNudgeGuideLine}

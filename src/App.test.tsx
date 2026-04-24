@@ -78,7 +78,9 @@ describe('App', () => {
     expect(await screen.findByRole('img', { name: /breadboard image board.png/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /rotate left/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /rotate right/i })).toBeTruthy()
-    expect(screen.getByLabelText(/guide line/i)).toBeTruthy()
+    expect(screen.getByLabelText(/position/i)).toBeTruthy()
+    expect(screen.getByLabelText(/nudge step/i)).toBeTruthy()
+    expect(screen.getByLabelText(/step size/i)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /connection point/i })).toBeNull()
   })
 
@@ -104,7 +106,7 @@ describe('App', () => {
 
     const stage = await screen.findByRole('img', { name: /breadboard image board.png/i })
 
-    fireEvent.change(screen.getByLabelText(/rotation step/i), { target: { value: '0.5' } })
+    fireEvent.change(screen.getByLabelText(/step size/i), { target: { value: '0.5' } })
     fireEvent.click(screen.getByRole('button', { name: /rotate right/i }))
 
     expect(stage.getAttribute('data-rotation-degrees')).toBe('12.5')
@@ -125,7 +127,7 @@ describe('App', () => {
 
     await screen.findByRole('img', { name: /breadboard image board.png/i })
 
-    fireEvent.change(screen.getByLabelText(/rotation step/i), { target: { value: '1.25' } })
+    fireEvent.change(screen.getByLabelText(/step size/i), { target: { value: '1.25' } })
     fireEvent.click(screen.getByRole('button', { name: /rotate right/i }))
     fireEvent.click(screen.getByRole('button', { name: /save alignment/i }))
 

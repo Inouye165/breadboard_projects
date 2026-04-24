@@ -61,14 +61,58 @@
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+  align-items: flex-start;
 }
 
-.control-guide {
-  max-width: 26rem;
-  padding: 10px 12px;
+.alignment-panel {
+  display: grid;
+  gap: 14px;
+  min-width: min(100%, 36rem);
+  max-width: 42rem;
+  padding: 12px 14px;
   border-radius: 16px;
   background: rgba(255, 251, 244, 0.92);
   border: 1px solid rgba(176, 128, 38, 0.18);
+}
+
+.alignment-panel__intro {
+  display: grid;
+  gap: 4px;
+}
+
+.alignment-panel__groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.alignment-panel__buttons,
+.alignment-panel__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.alignment-panel__footer {
+  justify-content: flex-end;
+}
+
+.control-cluster {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(176, 128, 38, 0.14);
+}
+
+.control-cluster__title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
 }
 
 .control-guide__title {
@@ -113,6 +157,12 @@
   color: inherit;
 }
 
+.control-group__value {
+  margin: -2px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 .image-workspace__stage-shell {
   flex: 1 1 auto;
   min-height: 0;
@@ -146,12 +196,6 @@
   stroke: transparent;
   stroke-width: 24;
   cursor: ns-resize;
-}
-
-.image-stage__guide-line-shadow {
-  stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 8;
-  pointer-events: none;
 }
 
 .image-stage__guide-line {
@@ -233,6 +277,14 @@
   .image-workspace__actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .alignment-panel {
+    width: 100%;
+  }
+
+  .alignment-panel__groups {
+    grid-template-columns: 1fr;
   }
 
   .action-button {

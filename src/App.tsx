@@ -8,7 +8,8 @@ import { loadSavedWorkspace, saveWorkspace, uploadWorkspaceImage } from './lib/i
 
 const GUIDE_LINE_MIN = 0
 const GUIDE_LINE_MAX = 100
-const GUIDE_LINE_STEP = 0.5
+const DEFAULT_GUIDE_LINE_STEP = 0.5
+const DEFAULT_ROTATION_STEP = 0.25
 
 function alignmentsMatch(left: SavedWorkspace['alignment'], right: SavedWorkspace['alignment']) {
   return JSON.stringify(left) === JSON.stringify(right)
@@ -24,7 +25,8 @@ function App() {
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null)
   const [draftAlignment, setDraftAlignment] = useState(createDefaultAlignment())
   const [guideLinePercent, setGuideLinePercent] = useState(25)
-  const [rotationInput, setRotationInput] = useState('0.25')
+  const [rotationStep, setRotationStep] = useState(DEFAULT_ROTATION_STEP)
+  const [guideLineStep, setGuideLineStep] = useState(DEFAULT_GUIDE_LINE_STEP)
   const [isBusy, setIsBusy] = useState(true)
   const [status, setStatus] = useState('Loading saved image workspace...')
 
@@ -160,12 +162,6 @@ function App() {
     }
   }
 
-  function getRotationStep() {
-    const rotationStep = Number.parseFloat(rotationInput)
-
-    return Number.isFinite(rotationStep) && rotationStep > 0 ? rotationStep : null
-  }
-
   function updatePreviewRotation(delta: number) {
     if (!workspace || delta === 0) {
       return
@@ -179,24 +175,10 @@ function App() {
   }
 
   function handleRotateLeft(multiplier = 1) {
-    const rotationStep = getRotationStep()
-
-    if (!rotationStep) {
-      setStatus('Enter a positive rotation step in degrees before rotating the preview.')
-      return
-    }
-
     updatePreviewRotation(-rotationStep * multiplier)
   }
 
   function handleRotateRight(multiplier = 1) {
-    const rotationStep = getRotationStep()
-
-    if (!rotationStep) {
-      setStatus('Enter a positive rotation step in degrees before rotating the preview.')
-      return
-    }
-
     updatePreviewRotation(rotationStep * multiplier)
   }
 
@@ -206,7 +188,7 @@ function App() {
 
   function handleNudgeGuideLine(direction: -1 | 1, multiplier = 1) {
     setGuideLinePercent((currentValue) =>
-      clampGuideLinePercent(currentValue + direction * GUIDE_LINE_STEP * multiplier),
+      clampGuideLinePercent(currentValue + direction * guideLineStep * multiplier),
     )
     setStatus('Guide line moved. Keep aligning live, then save when the image matches the guide.')
   }
@@ -273,13 +255,15 @@ function App() {
         imagePath={workspace?.imagePath}
         rotationDegrees={draftAlignment.rotationDegrees}
         guideLinePercent={guideLinePercent}
-        rotationInput={rotationInput}
+        rotationStep={rotationStep}
+        guideLineStep={guideLineStep}
         isBusy={isBusy}
         isSaveDisabled={!hasUnsavedAlignment}
         status={status}
         onUploadRequest={handleUploadRequest}
         onGuideLineChange={handleGuideLineChange}
-        onRotationInputChange={setRotationInput}
+        onRotationStepChange={setRotationStep}
+        onGuideLineStepChange={setGuideLineStep}
         onRotateLeft={handleRotateLeft}
         onRotateRight={handleRotateRight}
         onNudgeGuideLine={handleNudgeGuideLine}
