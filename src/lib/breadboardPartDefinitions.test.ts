@@ -8,6 +8,7 @@ import {
   moveBreadboardPoint,
   moveBreadboardRegion,
   moveBreadboardRow,
+  rotateBreadboardRegion,
 } from './breadboardPartDefinitions'
 
 function createTestDefinition() {
@@ -79,6 +80,23 @@ describe('breadboardPartDefinitions', () => {
 
     expect(movedRegion.points.find((point) => point.id === 'A1')?.x).toBeCloseTo((original?.x ?? 0) + 0.01)
     expect(movedRegion.points.find((point) => point.id === 'A1')?.y).toBeCloseTo((original?.y ?? 0) + 0.02)
+  })
+
+  it('rotates a region overlay without changing the image', () => {
+    const definition = createTestDefinition()
+    const originalPoint = definition.points.find((point) => point.id === 'A1')
+    const originalOppositePoint = definition.points.find((point) => point.id === 'E60')
+    const rotated = rotateBreadboardRegion(definition, 'upper-terminal-strip', 3)
+    const rotatedPoint = rotated.points.find((point) => point.id === 'A1')
+    const rotatedOppositePoint = rotated.points.find((point) => point.id === 'E60')
+
+    expect(rotated.imageSrc).toBe(definition.imageSrc)
+    expect(rotated.imageWidth).toBe(definition.imageWidth)
+    expect(rotated.imageHeight).toBe(definition.imageHeight)
+    expect(rotatedPoint?.x).not.toBeCloseTo(originalPoint?.x ?? 0)
+    expect(rotatedPoint?.y).not.toBeCloseTo(originalPoint?.y ?? 0)
+    expect(rotatedOppositePoint?.x).not.toBeCloseTo(originalOppositePoint?.x ?? 0)
+    expect(rotatedOppositePoint?.y).not.toBeCloseTo(originalOppositePoint?.y ?? 0)
   })
 
   it('updates row, column, and point offsets independently', () => {

@@ -47,6 +47,33 @@ function cloneAnchors(anchors: PartRegionAnchor[]) {
   return anchors.map((anchor) => ({ ...anchor }))
 }
 
+function rotatePosition(x: number, y: number, centerX: number, centerY: number, radians: number) {
+  const translatedX = x - centerX
+  const translatedY = y - centerY
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+
+  return {
+    x: clampNormalized(centerX + translatedX * cos - translatedY * sin),
+    y: clampNormalized(centerY + translatedX * sin + translatedY * cos),
+  }
+}
+
+function getAnchorCenter(anchors: PartRegionAnchor[]) {
+  const total = anchors.reduce(
+    (accumulator, anchor) => ({
+      x: accumulator.x + anchor.x,
+      y: accumulator.y + anchor.y,
+    }),
+    { x: 0, y: 0 },
+  )
+
+  return {
+    x: total.x / anchors.length,
+    y: total.y / anchors.length,
+  }
+}
+
 function createRegionTemplate(
   id: string,
   name: string,
@@ -532,6 +559,88 @@ export function moveBreadboardRegion(
           x: clampNormalized(anchor.x + dx),
           y: clampNormalized(anchor.y + dy),
         })),
+      },
+    },
+  })
+}
+
+export function rotateBreadboardRegion(
+  definition: PartDefinition,
+  regionId: string,
+  degrees: number,
+) {
+  const radians = (degrees * Math.PI) / 180
+
+  if (!definition.metadata.template || !definition.metadata.calibration) {
+    const region = getPartRegion(definition, regionId)
+
+    if (!region) {
+      return definition
+    }
+
+    const center = getAnchorCenter(region.anchors)
+    const rotatedDefinition = updatePartPoints(definition, region.pointIds, (point) => {
+      const nextPosition = rotatePosition(point.x, point.y, center.x, center.y, radians)
+
+      return {
+        ...point,
+        x: nextPosition.x,
+        y: nextPosition.y,
+      }
+    })
+
+    return {
+      ...rotatedDefinition,
+      metadata: {
+        ...rotatedDefinition.metadata,
+        regions: rotatedDefinition.metadata.regions?.map((entry) => {
+          if (entry.id !== regionId) {
+            return entry
+          }
+
+          return {
+            ...entry,
+            anchors: entry.anchors.map((anchor) => {
+              const nextPosition = rotatePosition(anchor.x, anchor.y, center.x, center.y, radians)
+
+              return {
+                ...anchor,
+                x: nextPosition.x,
+                y: nextPosition.y,
+              }
+            }),
+          }
+        }),
+      },
+    }
+  }
+
+  const template = getTemplate(definition)
+  const calibration = getCalibration(definition, template)
+  const regionTemplate = template.regions.find((entry) => entry.id === regionId)
+
+  if (!regionTemplate) {
+    return definition
+  }
+
+  const currentCalibration = getRegionCalibration(regionTemplate, calibration)
+  const center = getAnchorCenter(currentCalibration.anchors)
+
+  return rebuildBreadboardDefinition(definition, {
+    ...calibration,
+    regions: {
+      ...calibration.regions,
+      [regionId]: {
+        ...currentCalibration,
+        anchors: currentCalibration.anchors.map((anchor) => {
+          const nextPosition = rotatePosition(anchor.x, anchor.y, center.x, center.y, radians)
+
+          return {
+            ...anchor,
+            x: nextPosition.x,
+            y: nextPosition.y,
+          }
+        }),
       },
     },
   })

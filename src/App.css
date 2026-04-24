@@ -1,6 +1,6 @@
 .app-shell {
   min-height: 100vh;
-  padding: 20px;
+  padding: 8px;
   display: grid;
   box-sizing: border-box;
   overflow: auto;
@@ -27,7 +27,7 @@
 .workspace {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 16px;
+  gap: 8px;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -36,7 +36,7 @@
 .workspace-top {
   display: grid;
   grid-template-columns: minmax(280px, 1.15fr) repeat(2, minmax(240px, 0.92fr));
-  gap: 16px;
+  gap: 8px;
   min-height: 0;
   align-items: stretch;
 }
@@ -95,29 +95,26 @@
 }
 
 .workspace-panel--breadboard > .panel-heading {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: minmax(132px, 168px) 1fr;
-  align-items: center;
+  position: static;
+  z-index: auto;
+  display: flex;
   margin: 0;
-  padding: 16px 18px;
-  pointer-events: none;
+  padding: 10px 12px 0;
+  pointer-events: auto;
 }
 
 .workspace-panel--breadboard > .panel-heading > div {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   justify-self: start;
   align-self: center;
-  max-width: 150px;
-  padding: 14px 14px 16px;
-  border-radius: 20px;
-  background: rgba(255, 251, 243, 0.8);
-  border: 1px solid rgba(161, 125, 64, 0.12);
-  box-shadow: 0 14px 30px rgba(90, 68, 31, 0.08);
+  max-width: none;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   pointer-events: auto;
 }
 
@@ -321,15 +318,15 @@
   align-items: stretch;
   justify-content: stretch;
   overflow: hidden;
-  padding: 18px;
+  padding: 4px 8px 8px;
 }
 
 .part-editor {
   display: grid;
-  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(250px, 290px) minmax(0, 1fr);
+  gap: 8px;
   width: 100%;
-  min-height: 0;
+  min-height: calc(100vh - 180px);
   outline: none;
 }
 
@@ -338,7 +335,7 @@
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  padding: 18px;
+  padding: 14px;
   border-radius: 22px;
   background: rgba(255, 252, 244, 0.92);
   border: 1px solid rgba(137, 96, 20, 0.12);
@@ -403,17 +400,17 @@
 .part-editor__canvas-shell {
   min-width: 0;
   min-height: 0;
-  border-radius: 22px;
+  border-radius: 18px;
   border: 1px solid rgba(137, 96, 20, 0.1);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 240, 228, 0.94));
   overflow: auto;
-  padding: 16px;
+  padding: 4px;
 }
 
 .part-canvas {
   width: 100%;
   height: 100%;
-  min-height: 540px;
+  min-height: calc(100vh - 220px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -431,6 +428,14 @@
 .part-canvas__content {
   position: relative;
   display: block;
+}
+
+.part-canvas__content--rotated {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center center;
 }
 
 .part-canvas__image {
@@ -484,8 +489,8 @@
 }
 
 .part-canvas__anchor {
-  fill: rgba(255, 251, 244, 0.96);
-  stroke: rgba(181, 102, 0, 0.72);
+  fill: rgba(255, 245, 235, 0.98);
+  stroke: rgba(223, 53, 53, 0.9);
   stroke-width: 2.5;
   pointer-events: none;
 }
@@ -513,14 +518,14 @@
 }
 
 .part-canvas__point--visible {
-  fill: rgba(255, 255, 255, 0.28);
-  stroke: rgba(212, 132, 23, 0.42);
-  opacity: 0.78;
+  fill: rgba(228, 36, 36, 0.9);
+  stroke: rgba(255, 255, 255, 0.92);
+  opacity: 1;
 }
 
 .part-canvas__point--selected {
-  fill: rgba(255, 236, 201, 0.96);
-  stroke: rgba(188, 101, 0, 1);
+  fill: rgba(255, 78, 78, 1);
+  stroke: rgba(255, 255, 255, 1);
   opacity: 1;
 }
 
@@ -663,7 +668,7 @@
 
 @media (max-width: 900px) {
   .app-shell {
-    padding: 24px;
+    padding: 8px;
     height: auto;
     min-height: 100vh;
     overflow: visible;
@@ -690,7 +695,7 @@
   .workspace-panel--breadboard > .panel-heading {
     position: static;
     display: flex;
-    padding: 16px 16px 0;
+    padding: 10px 12px 0;
     pointer-events: auto;
   }
 
@@ -713,7 +718,7 @@
   }
 
   .breadboard-media {
-    padding: 12px;
+    padding: 4px;
   }
 
   .part-editor {

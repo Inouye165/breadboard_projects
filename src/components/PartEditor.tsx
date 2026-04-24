@@ -9,6 +9,7 @@ import {
   moveBreadboardRegion,
   moveBreadboardRow,
   resetBreadboardRegion,
+  rotateBreadboardRegion,
 } from '../lib/breadboardPartDefinitions'
 import { loadPartDefinition, savePartDefinition } from '../lib/partDefinitionStorage'
 import { getPartPointById, getPartRegion, type PartDefinition, type Position } from '../lib/parts'
@@ -44,6 +45,38 @@ function createInitialDefinition(
   })
 }
 
+function normalizeDefinition(
+  savedDefinition: PartDefinition | undefined,
+  imageSrc: string,
+  imageWidth: number,
+  imageHeight: number,
+  imageName?: string,
+) {
+  const fallbackDefinition = createInitialDefinition(imageSrc, imageWidth, imageHeight, imageName)
+
+  if (!savedDefinition) {
+    return fallbackDefinition
+  }
+
+  const hasCalibrationTemplate =
+    (savedDefinition.metadata.template?.regions.length ?? 0) > 0 &&
+    (savedDefinition.metadata.regions?.length ?? 0) > 0 &&
+    savedDefinition.points.length > 0
+
+  if (!hasCalibrationTemplate) {
+    return fallbackDefinition
+  }
+
+  return {
+    ...savedDefinition,
+    id: createDefinitionId(imageName),
+    name: imageName ?? savedDefinition.name,
+    imageSrc,
+    imageWidth,
+    imageHeight,
+  }
+}
+
 function getPointSelection(definition: PartDefinition, pointId: string) {
   const point = getPartPointById(definition, pointId)
 
@@ -63,23 +96,14 @@ export function PartEditor({
 }: PartEditorProps) {
   const savedDefinition = loadPartDefinition(createDefinitionId(imageName))
   const [definition, setDefinition] = useState<PartDefinition>(() =>
-    savedDefinition
-      ? {
-          ...savedDefinition,
-          id: createDefinitionId(imageName),
-          name: imageName ?? savedDefinition.name,
-          imageSrc,
-          imageWidth,
-          imageHeight,
-        }
-      : createInitialDefinition(imageSrc, imageWidth, imageHeight, imageName),
+    normalizeDefinition(savedDefinition, imageSrc, imageWidth, imageHeight, imageName),
   )
   const [selectedRegionId, setSelectedRegionId] = useState(definition.metadata.regions?.[0]?.id ?? '')
   const [selectedScope, setSelectedScope] = useState<'region' | 'row' | 'column' | 'point'>('region')
   const [selectedRowId, setSelectedRowId] = useState('')
   const [selectedColumnId, setSelectedColumnId] = useState('')
   const [selectedPointId, setSelectedPointId] = useState('')
-  const [showDebugPoints, setShowDebugPoints] = useState(false)
+  const [showDebugPoints, setShowDebugPoints] = useState(true)
   const [showLabels, setShowLabels] = useState(false)
   const [statusMessage, setStatusMessage] = useState(
     savedDefinition
@@ -91,7 +115,13 @@ export function PartEditor({
     savePartDefinition(definition)
   }, [definition])
 
-  const selectedRegion = selectedRegionId ? getPartRegion(definition, selectedRegionId) : undefined
+  const effectiveSelectedRegionId =
+    definition.metadata.regions?.some((region) => region.id === selectedRegionId)
+      ? selectedRegionId
+      : (definition.metadata.regions?.[0]?.id ?? '')
+  const selectedRegion = effectiveSelectedRegionId
+    ? getPartRegion(definition, effectiveSelectedRegionId)
+    : undefined
   const effectiveSelectedRowId =
     selectedRegion?.rows.some((row) => row.id === selectedRowId)
       ? selectedRowId
@@ -131,23 +161,23 @@ export function PartEditor({
 
   function applyNudge(delta: Position) {
     setDefinition((currentDefinition) => {
-      if (!selectedRegionId) {
+      if (!effectiveSelectedRegionId) {
         return currentDefinition
       }
 
       if (selectedScope === 'row' && effectiveSelectedRowId) {
-        return moveBreadboardRow(currentDefinition, selectedRegionId, effectiveSelectedRowId, delta.x, delta.y)
+        return moveBreadboardRow(currentDefinition, effectiveSelectedRegionId, effectiveSelectedRowId, delta.x, delta.y)
       }
 
       if (selectedScope === 'column' && effectiveSelectedColumnId) {
-        return moveBreadboardColumn(currentDefinition, selectedRegionId, effectiveSelectedColumnId, delta.x, delta.y)
+        return moveBreadboardColumn(currentDefinition, effectiveSelectedRegionId, effectiveSelectedColumnId, delta.x, delta.y)
       }
 
       if (selectedScope === 'point' && effectiveSelectedPointId) {
-        return moveBreadboardPoint(currentDefinition, selectedRegionId, effectiveSelectedPointId, delta.x, delta.y)
+        return moveBreadboardPoint(currentDefinition, effectiveSelectedRegionId, effectiveSelectedPointId, delta.x, delta.y)
       }
 
-      return moveBreadboardRegion(currentDefinition, selectedRegionId, delta.x, delta.y)
+      return moveBreadboardRegion(currentDefinition, effectiveSelectedRegionId, delta.x, delta.y)
     })
   }
 
@@ -174,7 +204,7 @@ export function PartEditor({
       return
     }
 
-    if (!selectedRegionId) {
+    if (!effectiveSelectedRegionId) {
       return
     }
 
@@ -246,17 +276,28 @@ export function PartEditor({
   }
 
   function handleResetRegion() {
-    if (!selectedRegionId) {
+    if (!effectiveSelectedRegionId) {
       return
     }
 
-    setDefinition((currentDefinition) => resetBreadboardRegion(currentDefinition, selectedRegionId))
+    setDefinition((currentDefinition) => resetBreadboardRegion(currentDefinition, effectiveSelectedRegionId))
     setStatusMessage('Selected region reset to the default template anchors and offsets.')
   }
 
   function handleSaveDefinition() {
     savePartDefinition(definition)
     setStatusMessage('Aligned breadboard definition saved locally for this image.')
+  }
+
+  function handleRotateRegion(degrees: number) {
+    if (!effectiveSelectedRegionId) {
+      return
+    }
+
+    setDefinition((currentDefinition) =>
+      rotateBreadboardRegion(currentDefinition, effectiveSelectedRegionId, degrees),
+    )
+    setStatusMessage(`Rotated ${selectedRegion?.name ?? 'selected region'} by ${degrees}°.`)
   }
 
   const selectedPoint = effectiveSelectedPointId
@@ -297,7 +338,7 @@ export function PartEditor({
           <select
             id="region-select"
             className="part-editor__select"
-            value={selectedRegionId}
+            value={effectiveSelectedRegionId}
             onChange={(event) => handleRegionSelected(event.target.value)}
           >
             {(definition.metadata.regions ?? []).map((region) => (
@@ -430,6 +471,25 @@ export function PartEditor({
         </div>
 
         <div className="part-editor__group">
+          <p className="part-editor__label">Rotate overlay</p>
+          <p className="part-editor__hint">Rotate the selected region without moving the image.</p>
+          <div className="part-editor__toolbar">
+            <button type="button" className="ghost-button" onClick={() => handleRotateRegion(-1)}>
+              Rotate -1°
+            </button>
+            <button type="button" className="ghost-button" onClick={() => handleRotateRegion(1)}>
+              Rotate +1°
+            </button>
+            <button type="button" className="ghost-button" onClick={() => handleRotateRegion(-5)}>
+              Rotate -5°
+            </button>
+            <button type="button" className="ghost-button" onClick={() => handleRotateRegion(5)}>
+              Rotate +5°
+            </button>
+          </div>
+        </div>
+
+        <div className="part-editor__group">
           <p className="part-editor__label">Selection</p>
           <p className="part-editor__hint">
             {selectedScope === 'point' && selectedPoint
@@ -451,7 +511,7 @@ export function PartEditor({
           showPoints={showDebugPoints}
           showLabels={showLabels}
           highlightedPointIds={highlightedPointIds}
-          selectedRegionId={selectedRegionId}
+          selectedRegionId={effectiveSelectedRegionId}
           selectedRowId={selectedScope === 'row' ? effectiveSelectedRowId : undefined}
           selectedColumnId={selectedScope === 'column' ? effectiveSelectedColumnId : undefined}
           selectedPointId={selectedScope === 'point' ? effectiveSelectedPointId : undefined}

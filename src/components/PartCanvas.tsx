@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { PartDefinition } from '../lib/parts'
 
@@ -31,6 +31,7 @@ type PartCanvasLayout = {
   boundingHeight: number
   contentWidth: number
   contentHeight: number
+  isRotated: boolean
 }
 
 export function PartCanvas({
@@ -63,9 +64,9 @@ export function PartCanvas({
   const highlightedPointIdSet = new Set(highlightedPointIds)
   const pointMap = new Map(definition.points.map((point) => [point.id, point]))
 
-  function getNormalizedPosition(
+  const getNormalizedPosition = useCallback((
     event: Pick<PointerEvent, 'clientX' | 'clientY'> | React.PointerEvent<SVGElement>,
-  ) {
+  ) => {
     const containerElement = containerRef.current
 
     if (!containerElement) {
@@ -84,37 +85,54 @@ export function PartCanvas({
       }
     }
 
-    return {
+    const normalizedDisplayPosition = {
       x: Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width)),
       y: Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height)),
     }
-  }
+
+    if (layout?.isRotated) {
+      return {
+        x: normalizedDisplayPosition.y,
+        y: 1 - normalizedDisplayPosition.x,
+      }
+    }
+
+    return {
+      x: normalizedDisplayPosition.x,
+      y: normalizedDisplayPosition.y,
+    }
+  }, [layout?.isRotated])
 
   useEffect(() => {
     function updateLayout() {
       const containerElement = containerRef.current
       const { imageWidth, imageHeight } = definition
+      const isRotated = imageHeight > imageWidth
+      const displayWidth = isRotated ? imageHeight : imageWidth
+      const displayHeight = isRotated ? imageWidth : imageHeight
 
       const availableWidth = containerElement?.clientWidth ?? 0
       const availableHeight = containerElement?.clientHeight ?? 0
 
       if (!availableWidth || !availableHeight) {
         setLayout({
-          boundingWidth: imageWidth * zoom,
-          boundingHeight: imageHeight * zoom,
+          boundingWidth: displayWidth * zoom,
+          boundingHeight: displayHeight * zoom,
           contentWidth: imageWidth * zoom,
           contentHeight: imageHeight * zoom,
+          isRotated,
         })
         return
       }
 
-      const scale = Math.min(availableWidth / imageWidth, availableHeight / imageHeight) * zoom
+      const scale = Math.min(availableWidth / displayWidth, availableHeight / displayHeight) * zoom
 
       setLayout({
-        boundingWidth: imageWidth * scale,
-        boundingHeight: imageHeight * scale,
+        boundingWidth: displayWidth * scale,
+        boundingHeight: displayHeight * scale,
         contentWidth: imageWidth * scale,
         contentHeight: imageHeight * scale,
+        isRotated,
       })
     }
 
@@ -181,7 +199,7 @@ export function PartCanvas({
       window.removeEventListener('pointermove', handleWindowPointerMove)
       window.removeEventListener('pointerup', handleWindowPointerUp)
     }
-  }, [onAnchorDrag, onPointDrag, onRegionDrag])
+  }, [getNormalizedPosition, onAnchorDrag, onPointDrag, onRegionDrag])
 
   function handlePointPointerDown(
     event: React.PointerEvent<SVGCircleElement>,
@@ -238,7 +256,7 @@ export function PartCanvas({
           }}
         >
           <div
-            className="part-canvas__content"
+            className={`part-canvas__content${layout.isRotated ? ' part-canvas__content--rotated' : ''}`}
             style={{
               width: `${layout.contentWidth}px`,
               height: `${layout.contentHeight}px`,
@@ -337,7 +355,7 @@ export function PartCanvas({
                       className={`part-canvas__point${isVisible ? ' part-canvas__point--visible' : ''}${isHighlighted || isSelected ? ' part-canvas__point--selected' : ''}`}
                       cx={pointX}
                       cy={pointY}
-                      r={isHighlighted || isSelected ? 7 : 4.5}
+                      r={isHighlighted || isSelected ? 7 : 5}
                     />
                     <circle
                       className="part-canvas__point-hit"

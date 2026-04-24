@@ -44,7 +44,7 @@ describe('BreadboardCanvas', () => {
     expect(onImageSelected).toHaveBeenCalledWith(file)
   })
 
-  it('restores autosaved groups for the same board later', () => {
+  it('migrates stale autosaved definitions into the standard calibration template', () => {
     window.localStorage.setItem(
       'breadboard-projects.part-definitions',
       JSON.stringify({
@@ -97,6 +97,6 @@ describe('BreadboardCanvas', () => {
     )
 
     expect(screen.getByText(/restored your saved calibration for this board/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /connection point group 1 1,1/i })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /^connection point a1$/i }).length).toBeGreaterThan(0)
   })
 })
