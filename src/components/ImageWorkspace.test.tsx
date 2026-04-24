@@ -92,4 +92,28 @@ describe('ImageWorkspace', () => {
     expect(screen.queryByRole('button', { name: /connection point/i })).toBeNull()
     expect(container.querySelector('.part-canvas__overlay')).toBeNull()
   })
+
+  it('renders the image stage with width-driven sizing and no fixed crop', async () => {
+    render(
+      <ImageWorkspace
+        imageName="board.png"
+        imagePath="/board.png"
+        rotationDegrees={0}
+        pendingPoints={[]}
+        isAlignmentMode={false}
+        status="Saved image loaded"
+        onUploadRequest={vi.fn()}
+        onEnterAlignmentMode={vi.fn()}
+        onResetAlignment={vi.fn()}
+        onSaveAlignment={vi.fn()}
+        onStagePointSelect={vi.fn()}
+      />,
+    )
+
+    const stage = await screen.findByRole('img', { name: /breadboard image board.png/i })
+
+    expect(stage.tagName.toLowerCase()).toBe('svg')
+    expect(stage.classList.contains('image-stage__svg')).toBe(true)
+    expect(stage.getAttribute('viewBox')).toBe('0 0 1000 500')
+  })
 })

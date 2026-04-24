@@ -23,6 +23,50 @@ type ImageDimensions = {
   height: number
 }
 
+type RotatedLayout = {
+  width: number
+  height: number
+  offsetX: number
+  offsetY: number
+}
+
+function rotatePoint(x: number, y: number, centerX: number, centerY: number, angleRadians: number) {
+  const translatedX = x - centerX
+  const translatedY = y - centerY
+  const cos = Math.cos(angleRadians)
+  const sin = Math.sin(angleRadians)
+
+  return {
+    x: translatedX * cos - translatedY * sin + centerX,
+    y: translatedX * sin + translatedY * cos + centerY,
+  }
+}
+
+function getRotatedLayout(width: number, height: number, rotationDegrees: number): RotatedLayout {
+  const centerX = width / 2
+  const centerY = height / 2
+  const angleRadians = (rotationDegrees * Math.PI) / 180
+  const corners = [
+    rotatePoint(0, 0, centerX, centerY, angleRadians),
+    rotatePoint(width, 0, centerX, centerY, angleRadians),
+    rotatePoint(width, height, centerX, centerY, angleRadians),
+    rotatePoint(0, height, centerX, centerY, angleRadians),
+  ]
+  const xValues = corners.map((corner) => corner.x)
+  const yValues = corners.map((corner) => corner.y)
+  const minX = Math.min(...xValues)
+  const maxX = Math.max(...xValues)
+  const minY = Math.min(...yValues)
+  const maxY = Math.max(...yValues)
+
+  return {
+    width: maxX - minX,
+    height: maxY - minY,
+    offsetX: -minX,
+    offsetY: -minY,
+  }
+}
+
 export function ImageWorkspace({
   imageName,
   imagePath,
@@ -40,6 +84,9 @@ export function ImageWorkspace({
 }: ImageWorkspaceProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [imageDimensions, setImageDimensions] = useState<ImageDimensions>()
+  const layout = imageDimensions
+    ? getRotatedLayout(imageDimensions.width, imageDimensions.height, rotationDegrees)
+    : undefined
 
   useEffect(() => {
     if (!imagePath) {
@@ -74,7 +121,7 @@ export function ImageWorkspace({
   }, [imagePath])
 
   function handleStageClick(event: React.MouseEvent<SVGSVGElement>) {
-    if (!isAlignmentMode || !imageDimensions) {
+    if (!isAlignmentMode || !imageDimensions || !layout) {
       return
     }
 
@@ -84,9 +131,23 @@ export function ImageWorkspace({
       return
     }
 
+    const stageX = ((event.clientX - rect.left) / rect.width) * layout.width
+    const stageY = ((event.clientY - rect.top) / rect.height) * layout.height
+    const imageX = stageX - layout.offsetX
+    const imageY = stageY - layout.offsetY
+    const centerX = imageDimensions.width / 2
+    const centerY = imageDimensions.height / 2
+    const unrotatedPoint = rotatePoint(
+      imageX,
+      imageY,
+      centerX,
+      centerY,
+      (-rotationDegrees * Math.PI) / 180,
+    )
+
     onStagePointSelect({
-      x: (event.clientX - rect.left) / rect.width,
-      y: (event.clientY - rect.top) / rect.height,
+      x: unrotatedPoint.x / imageDimensions.width,
+      y: unrotatedPoint.y / imageDimensions.height,
     })
   }
 
@@ -94,8 +155,7 @@ export function ImageWorkspace({
     <section className="image-workspace" aria-label="Image alignment workspace">
       <header className="image-workspace__header">
         <div className="image-workspace__title-block">
-          <p className="image-workspace__eyebrow">Phase 1</p>
-          <h1>Image alignment</h1>
+          <p className="image-workspace__eyebrow">Phase 1 image alignment</p>
           <p className="image-workspace__status">{status}</p>
         </div>
         <div className="image-workspace__actions">
@@ -132,20 +192,20 @@ export function ImageWorkspace({
       </header>
 
       <section className="image-workspace__stage-shell">
-        {imagePath && imageDimensions ? (
+        {imagePath && imageDimensions && layout ? (
           <div className="image-stage" aria-label="Breadboard image stage">
             <svg
               ref={svgRef}
               className="image-stage__svg"
               data-rotation-degrees={rotationDegrees}
-              viewBox={`0 0 ${imageDimensions.width} ${imageDimensions.height}`}
+              viewBox={`0 0 ${layout.width} ${layout.height}`}
               role="img"
               aria-label={imageName ? `Breadboard image ${imageName}` : 'Breadboard image'}
               onClick={handleStageClick}
             >
               <g
                 className="image-stage__transform"
-                transform={`rotate(${rotationDegrees} ${imageDimensions.width / 2} ${imageDimensions.height / 2})`}
+                transform={`translate(${layout.offsetX} ${layout.offsetY}) rotate(${rotationDegrees} ${imageDimensions.width / 2} ${imageDimensions.height / 2})`}
               >
                 <image
                   href={imagePath}
@@ -153,16 +213,16 @@ export function ImageWorkspace({
                   height={imageDimensions.height}
                   preserveAspectRatio="none"
                 />
+                {pendingPoints.map((point, index) => (
+                  <circle
+                    key={`${point.x}-${point.y}-${index}`}
+                    className="image-stage__marker"
+                    cx={point.x * imageDimensions.width}
+                    cy={point.y * imageDimensions.height}
+                    r={Math.max(imageDimensions.width, imageDimensions.height) * 0.008}
+                  />
+                ))}
               </g>
-              {pendingPoints.map((point, index) => (
-                <circle
-                  key={`${point.x}-${point.y}-${index}`}
-                  className="image-stage__marker"
-                  cx={point.x * imageDimensions.width}
-                  cy={point.y * imageDimensions.height}
-                  r={Math.max(imageDimensions.width, imageDimensions.height) * 0.008}
-                />
-              ))}
             </svg>
           </div>
         ) : (

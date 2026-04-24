@@ -43,8 +43,17 @@ export async function loadSavedWorkspace(fetchImpl: typeof fetch = fetch) {
   return payload.workspace
 }
 
-export async function uploadWorkspaceImage(file: File, fetchImpl: typeof fetch = fetch) {
-  const contentsBase64 = await readFileAsBase64(file)
+export type FileNormalizer = (file: File) => Promise<File>
+
+const identityNormalizer: FileNormalizer = async (file) => file
+
+export async function uploadWorkspaceImage(
+  file: File,
+  fetchImpl: typeof fetch = fetch,
+  normalizeFile: FileNormalizer = identityNormalizer,
+) {
+  const normalizedFile = await normalizeFile(file)
+  const contentsBase64 = await readFileAsBase64(normalizedFile)
   const payload = await parseResponse<{ workspace: SavedWorkspace }>(
     await fetchImpl(IMAGE_UPLOAD_ENDPOINT, {
       method: 'POST',
@@ -53,7 +62,7 @@ export async function uploadWorkspaceImage(file: File, fetchImpl: typeof fetch =
       },
       body: JSON.stringify({
         contentsBase64,
-        name: file.name,
+        name: normalizedFile.name,
       }),
     }),
   )

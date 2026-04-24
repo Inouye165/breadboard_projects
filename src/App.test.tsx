@@ -79,7 +79,9 @@ describe('App', () => {
     fireEvent.change(input, { target: { files: [file] } })
 
     await waitFor(() => {
-      expect(mockedApi.uploadWorkspaceImage).toHaveBeenCalledWith(file)
+      expect(mockedApi.uploadWorkspaceImage).toHaveBeenCalled()
     })
+
+    expect(mockedApi.uploadWorkspaceImage.mock.calls[0][0]).toBe(file)
   })
 })

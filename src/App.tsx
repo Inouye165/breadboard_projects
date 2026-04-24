@@ -8,6 +8,7 @@ import {
   type AlignmentPoint,
   type SavedWorkspace,
 } from './lib/imageAlignment'
+import { ensureLandscapeFile } from './lib/imageOrientation'
 import { loadSavedWorkspace, saveWorkspace, uploadWorkspaceImage } from './lib/imageWorkspaceApi'
 
 function alignmentsMatch(left: SavedWorkspace['alignment'], right: SavedWorkspace['alignment']) {
@@ -16,6 +17,7 @@ function alignmentsMatch(left: SavedWorkspace['alignment'], right: SavedWorkspac
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const normalizedImagePathsRef = useRef<Set<string>>(new Set())
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null)
   const [draftAlignment, setDraftAlignment] = useState(createDefaultAlignment())
   const [pendingPoints, setPendingPoints] = useState<AlignmentPoint[]>([])
@@ -68,6 +70,65 @@ function App() {
 
   const hasUnsavedAlignment = workspace ? !alignmentsMatch(workspace.alignment, draftAlignment) : false
 
+  useEffect(() => {
+    const imagePath = workspace?.imagePath
+
+    if (!imagePath || normalizedImagePathsRef.current.has(imagePath)) {
+      return
+    }
+
+    normalizedImagePathsRef.current.add(imagePath)
+
+    const currentWorkspace = workspace
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const response = await fetch(imagePath)
+
+        if (!response.ok) {
+          return
+        }
+
+        const blob = await response.blob()
+        const fileType = blob.type || 'image/jpeg'
+        const sourceFile = new File([blob], currentWorkspace.imageName, { type: fileType })
+        const normalizedFile = await ensureLandscapeFile(sourceFile)
+
+        if (cancelled || normalizedFile === sourceFile) {
+          return
+        }
+
+        const reuploaded = await uploadWorkspaceImage(normalizedFile, fetch, async (file) => file)
+
+        if (cancelled) {
+          return
+        }
+
+        normalizedImagePathsRef.current.add(reuploaded.imagePath)
+
+        const restored = await saveWorkspace({
+          ...reuploaded,
+          alignment: currentWorkspace.alignment,
+        })
+
+        if (cancelled) {
+          return
+        }
+
+        setWorkspace(restored)
+        setDraftAlignment(restored.alignment)
+        setStatus('Saved image was rotated so the long side runs horizontally.')
+      } catch {
+        // Leave the original image in place; UI still works.
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspace])
+
   function handleUploadRequest() {
     fileInputRef.current?.click()
   }
@@ -85,8 +146,9 @@ function App() {
     setPendingPoints([])
 
     try {
-      const nextWorkspace = await uploadWorkspaceImage(file)
+      const nextWorkspace = await uploadWorkspaceImage(file, fetch, ensureLandscapeFile)
 
+      normalizedImagePathsRef.current.add(nextWorkspace.imagePath)
       setWorkspace(nextWorkspace)
       setDraftAlignment(nextWorkspace.alignment)
       setStatus('Image saved locally. Click Align horizontally to pick two reference points.')
