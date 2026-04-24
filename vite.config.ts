@@ -1,9 +1,243 @@
+import { createReadStream } from 'node:fs'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vitest/config'
+import { defineConfig, type Connect, type Plugin } from 'vitest/config'
+
+const WORKSPACE_STORAGE_DIR = path.resolve(__dirname, '.breadboard-local')
+const WORKSPACE_IMAGE_DIR = path.join(WORKSPACE_STORAGE_DIR, 'images')
+const WORKSPACE_METADATA_FILE = path.join(WORKSPACE_STORAGE_DIR, 'workspace.json')
+const WORKSPACE_IMAGE_BASE_PATH = '/__breadboard_local__/images/'
+
+type AlignmentPoint = {
+  x: number
+  y: number
+}
+
+type SavedWorkspace = {
+  imageName: string
+  imagePath: string
+  alignment: {
+    rotationDegrees: number
+    referencePoints: [AlignmentPoint, AlignmentPoint] | null
+  }
+}
+
+type UploadPayload = {
+  contentsBase64?: string
+  name?: string
+}
+
+function sanitizeFileName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-')
+}
+
+function getContentType(filePath: string) {
+  const extension = path.extname(filePath).toLowerCase()
+
+  switch (extension) {
+    case '.png':
+      return 'image/png'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.webp':
+      return 'image/webp'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
+function createDefaultWorkspace(imageName: string, imagePath: string): SavedWorkspace {
+  return {
+    imageName,
+    imagePath,
+    alignment: {
+      rotationDegrees: 0,
+      referencePoints: null,
+    },
+  }
+}
+
+async function ensureWorkspaceStorage() {
+  await mkdir(WORKSPACE_IMAGE_DIR, { recursive: true })
+}
+
+async function readRequestBody(request: NodeJS.ReadableStream) {
+  const chunks: Buffer[] = []
+
+  for await (const chunk of request) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+  }
+
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+async function readSavedWorkspace() {
+  try {
+    const rawWorkspace = await readFile(WORKSPACE_METADATA_FILE, 'utf8')
+
+    return JSON.parse(rawWorkspace) as SavedWorkspace
+  } catch {
+    return null
+  }
+}
+
+async function writeSavedWorkspace(workspace: SavedWorkspace) {
+  await ensureWorkspaceStorage()
+  await writeFile(WORKSPACE_METADATA_FILE, JSON.stringify(workspace, null, 2), 'utf8')
+
+  return workspace
+}
+
+function sendJson(response: Connect.ServerResponse, statusCode: number, payload: unknown) {
+  response.statusCode = statusCode
+  response.setHeader('Content-Type', 'application/json')
+  response.end(JSON.stringify(payload))
+}
+
+async function handleWorkspaceRequest(
+  request: Connect.IncomingMessage,
+  response: Connect.ServerResponse,
+) {
+  if (request.method === 'GET') {
+    sendJson(response, 200, { workspace: await readSavedWorkspace() })
+    return true
+  }
+
+  if (request.method === 'POST') {
+    try {
+      const workspace = JSON.parse(await readRequestBody(request)) as SavedWorkspace
+
+      sendJson(response, 200, { workspace: await writeSavedWorkspace(workspace) })
+    } catch {
+      sendJson(response, 400, { error: 'Invalid workspace payload.' })
+    }
+
+    return true
+  }
+
+  return false
+}
+
+async function handleWorkspaceImageUpload(
+  request: Connect.IncomingMessage,
+  response: Connect.ServerResponse,
+) {
+  if (request.method !== 'POST') {
+    return false
+  }
+
+  try {
+    const payload = JSON.parse(await readRequestBody(request)) as UploadPayload
+
+    if (!payload.name || !payload.contentsBase64) {
+      sendJson(response, 400, { error: 'Missing image upload payload.' })
+      return true
+    }
+
+    await ensureWorkspaceStorage()
+
+    const fileName = `${Date.now()}-${sanitizeFileName(payload.name) || 'breadboard-image.png'}`
+    const filePath = path.join(WORKSPACE_IMAGE_DIR, fileName)
+
+    await writeFile(filePath, Buffer.from(payload.contentsBase64, 'base64'))
+
+    const workspace = await writeSavedWorkspace(
+      createDefaultWorkspace(payload.name, `${WORKSPACE_IMAGE_BASE_PATH}${fileName}`),
+    )
+
+    sendJson(response, 200, { workspace })
+  } catch {
+    sendJson(response, 400, { error: 'Could not save the uploaded image.' })
+  }
+
+  return true
+}
+
+async function handleWorkspaceImageRead(
+  request: Connect.IncomingMessage,
+  response: Connect.ServerResponse,
+) {
+  if (request.method !== 'GET' || !request.url) {
+    return false
+  }
+
+  const relativeImagePath = request.url.slice(WORKSPACE_IMAGE_BASE_PATH.length)
+  const filePath = path.join(WORKSPACE_IMAGE_DIR, relativeImagePath)
+
+  try {
+    const fileStat = await stat(filePath)
+
+    if (!fileStat.isFile()) {
+      response.statusCode = 404
+      response.end()
+      return true
+    }
+
+    response.statusCode = 200
+    response.setHeader('Cache-Control', 'no-store')
+    response.setHeader('Content-Type', getContentType(filePath))
+    createReadStream(filePath).pipe(response)
+  } catch {
+    response.statusCode = 404
+    response.end()
+  }
+
+  return true
+}
+
+function createWorkspacePersistenceMiddleware(): Connect.NextHandleFunction {
+  return (request, response, next) => {
+    const requestUrl = request.url ?? ''
+
+    if (requestUrl.startsWith('/api/workspace/image')) {
+      void handleWorkspaceImageUpload(request, response).then((handled) => {
+        if (!handled) {
+          next()
+        }
+      })
+      return
+    }
+
+    if (requestUrl === '/api/workspace') {
+      void handleWorkspaceRequest(request, response).then((handled) => {
+        if (!handled) {
+          next()
+        }
+      })
+      return
+    }
+
+    if (requestUrl.startsWith(WORKSPACE_IMAGE_BASE_PATH)) {
+      void handleWorkspaceImageRead(request, response).then((handled) => {
+        if (!handled) {
+          next()
+        }
+      })
+      return
+    }
+
+    next()
+  }
+}
+
+function imageWorkspacePersistencePlugin(): Plugin {
+  return {
+    name: 'image-workspace-persistence',
+    configureServer(server) {
+      server.middlewares.use(createWorkspacePersistenceMiddleware())
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(createWorkspacePersistenceMiddleware())
+    },
+  }
+}
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), imageWorkspacePersistencePlugin()],
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
