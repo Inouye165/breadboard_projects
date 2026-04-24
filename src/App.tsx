@@ -1,286 +1,275 @@
 import { useEffect, useRef, useState } from 'react'
-import './App.css'
-import { BreadboardCanvas } from './components/BreadboardCanvas'
-import {
-  canReadBreadboardLibrary,
-  getStoredBreadboardLibraryName,
-  loadSavedBreadboards,
-  persistBreadboardLibraryHandle,
-  restoreBreadboardLibraryHandle,
-  saveBreadboardImageToFolder,
-  type SavedBreadboard,
-} from './lib/breadboardLibrary'
 
-type DirectoryPickerWindow = Window & {
-  showDirectoryPicker?: (options?: {
-    mode?: 'read' | 'readwrite'
-    startIn?: 'downloads'
-  }) => Promise<FileSystemDirectoryHandle>
+import './App.css'
+import { ImageWorkspace } from './components/ImageWorkspace'
+import { createDefaultAlignment, type SavedWorkspace } from './lib/imageAlignment'
+import { ensureLandscapeFile, rotateImageFile } from './lib/imageOrientation'
+import { loadSavedWorkspace, saveWorkspace, uploadWorkspaceImage } from './lib/imageWorkspaceApi'
+
+const GUIDE_LINE_MIN = 0
+const GUIDE_LINE_MAX = 100
+const DEFAULT_GUIDE_LINE_STEP = 0.5
+const DEFAULT_ROTATION_STEP = 0.25
+
+function alignmentsMatch(left: SavedWorkspace['alignment'], right: SavedWorkspace['alignment']) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function clampGuideLinePercent(value: number) {
+  return Math.min(GUIDE_LINE_MAX, Math.max(GUIDE_LINE_MIN, value))
 }
 
 function App() {
-  const [savedBreadboards, setSavedBreadboards] = useState<SavedBreadboard[]>([])
-  const [currentBreadboardName, setCurrentBreadboardName] = useState<string>()
-  const [temporaryImage, setTemporaryImage] = useState<{ name: string; url: string }>()
-  const [libraryFolderName, setLibraryFolderName] = useState(getStoredBreadboardLibraryName())
-  const [libraryStatus, setLibraryStatus] = useState(
-    'Choose a folder to save breadboard images for reuse.',
-  )
-  const directoryHandleRef = useRef<FileSystemDirectoryHandle | null>(null)
-  const savedUrlsRef = useRef<string[]>([])
-
-  const selectedBreadboard = savedBreadboards.find(
-    (breadboard) => breadboard.name === currentBreadboardName,
-  )
-  const imageSrc = temporaryImage?.url ?? selectedBreadboard?.url
-  const imageName = temporaryImage?.name ?? selectedBreadboard?.name
-
-  function replaceSavedBreadboards(nextBreadboards: SavedBreadboard[]) {
-    const previousUrls = savedUrlsRef.current
-
-    savedUrlsRef.current = nextBreadboards.map((breadboard) => breadboard.url)
-    setSavedBreadboards(nextBreadboards)
-    previousUrls.forEach((url) => {
-      URL.revokeObjectURL(url)
-    })
-  }
-
-  function clearTemporaryImage() {
-    setTemporaryImage((currentTemporaryImage) => {
-      if (currentTemporaryImage) {
-        URL.revokeObjectURL(currentTemporaryImage.url)
-      }
-
-      return undefined
-    })
-  }
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const normalizedImagePathsRef = useRef<Set<string>>(new Set())
+  const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null)
+  const [draftAlignment, setDraftAlignment] = useState(createDefaultAlignment())
+  const [guideLinePercent, setGuideLinePercent] = useState(25)
+  const [rotationStep, setRotationStep] = useState(DEFAULT_ROTATION_STEP)
+  const [guideLineStep, setGuideLineStep] = useState(DEFAULT_GUIDE_LINE_STEP)
+  const [isBusy, setIsBusy] = useState(true)
+  const [status, setStatus] = useState('Loading saved image workspace...')
 
   useEffect(() => {
-    return () => {
-      if (temporaryImage) {
-        URL.revokeObjectURL(temporaryImage.url)
-      }
+    let isActive = true
 
-      savedUrlsRef.current.forEach((url) => {
-        URL.revokeObjectURL(url)
-      })
-    }
-  }, [temporaryImage])
-
-  useEffect(() => {
-    async function restoreSavedLibrary() {
+    async function restoreWorkspace() {
       try {
-        const storedHandle = await restoreBreadboardLibraryHandle()
+        const savedWorkspace = await loadSavedWorkspace()
 
-        if (!storedHandle) {
+        if (!isActive) {
           return
         }
 
-        directoryHandleRef.current = storedHandle
-        setLibraryFolderName(storedHandle.name)
-
-        const hasPermission = await canReadBreadboardLibrary(storedHandle)
-
-        if (!hasPermission) {
-          setLibraryStatus(`Reconnect ${storedHandle.name} to load saved breadboards.`)
+        if (!savedWorkspace) {
+          setWorkspace(null)
+          setDraftAlignment(createDefaultAlignment())
+          setStatus('Upload a breadboard image to start the alignment workflow.')
           return
         }
 
-        const nextBreadboards = await loadSavedBreadboards(storedHandle)
-
-        replaceSavedBreadboards(nextBreadboards)
-        setCurrentBreadboardName(nextBreadboards[0]?.name)
-        if (nextBreadboards.length > 0) {
-          setLibraryStatus(`Loaded ${nextBreadboards.length} saved breadboard image${nextBreadboards.length === 1 ? '' : 's'}.`)
-        }
+        setWorkspace(savedWorkspace)
+        setDraftAlignment(savedWorkspace.alignment)
+        setStatus(
+          savedWorkspace.alignment.rotationDegrees === 0
+            ? 'Saved image loaded. Click the stage, drag the guide, or use arrow keys to align it in real time.'
+            : 'Saved image loaded with a preview rotation. Fine tune it live, then save to bake it into the image.',
+        )
       } catch {
-        setLibraryStatus('Unable to reopen the saved folder automatically. Choose it again to restore the library.')
+        if (isActive) {
+          setStatus('Could not load the saved image workspace.')
+        }
+      } finally {
+        if (isActive) {
+          setIsBusy(false)
+        }
       }
     }
 
-    void restoreSavedLibrary()
+    void restoreWorkspace()
+
+    return () => {
+      isActive = false
+    }
   }, [])
 
-  async function chooseLibraryFolder() {
-    const pickerWindow = window as DirectoryPickerWindow
+  const hasUnsavedAlignment = workspace ? !alignmentsMatch(workspace.alignment, draftAlignment) : false
 
-    if (!pickerWindow.showDirectoryPicker) {
-      setLibraryStatus('Folder-backed saving requires a Chromium browser with local file access support.')
-      return null
-    }
+  useEffect(() => {
+    const imagePath = workspace?.imagePath
 
-    try {
-      const directoryHandle = await pickerWindow.showDirectoryPicker({
-        mode: 'readwrite',
-        startIn: 'downloads',
-      })
-
-      directoryHandleRef.current = directoryHandle
-      setLibraryFolderName(directoryHandle.name)
-      await persistBreadboardLibraryHandle(directoryHandle)
-
-      const nextBreadboards = await loadSavedBreadboards(directoryHandle)
-
-      replaceSavedBreadboards(nextBreadboards)
-      setLibraryStatus(`Saving breadboard images into ${directoryHandle.name}.`)
-
-      if (nextBreadboards.length > 0) {
-        clearTemporaryImage()
-        setCurrentBreadboardName((currentName) => currentName ?? nextBreadboards[0].name)
-      }
-
-      return directoryHandle
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        return null
-      }
-
-      setLibraryStatus('Could not open the folder you selected.')
-      return null
-    }
-  }
-
-  async function refreshBreadboardLibrary(
-    directoryHandle: FileSystemDirectoryHandle,
-    preferredBreadboardName?: string,
-  ) {
-    const nextBreadboards = await loadSavedBreadboards(directoryHandle)
-
-    replaceSavedBreadboards(nextBreadboards)
-    clearTemporaryImage()
-
-    const nextSelectedBreadboard =
-      nextBreadboards.find((breadboard) => breadboard.name === preferredBreadboardName) ??
-      nextBreadboards.find((breadboard) => breadboard.name === currentBreadboardName) ??
-      nextBreadboards[0]
-
-    setCurrentBreadboardName(nextSelectedBreadboard?.name)
-
-    return nextBreadboards
-  }
-
-  async function handleImageSelected(file: File) {
-    const directoryHandle = directoryHandleRef.current ?? (await chooseLibraryFolder())
-
-    if (!directoryHandle) {
-      clearTemporaryImage()
-      setTemporaryImage({
-        name: file.name,
-        url: URL.createObjectURL(file),
-      })
-      setCurrentBreadboardName(undefined)
-      setLibraryStatus('Image loaded for this tab only. Choose a folder to keep reusable copies.')
+    if (!imagePath || normalizedImagePathsRef.current.has(imagePath)) {
       return
     }
 
-    try {
-      const savedFileName = await saveBreadboardImageToFolder(directoryHandle, file)
-      const nextBreadboards = await refreshBreadboardLibrary(directoryHandle, savedFileName)
+    normalizedImagePathsRef.current.add(imagePath)
 
-      setLibraryStatus(
-        `Saved ${savedFileName} to ${directoryHandle.name}${nextBreadboards.length > 1 ? ` with ${nextBreadboards.length} boards available.` : '.'}`,
-      )
+    const currentWorkspace = workspace
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const response = await fetch(imagePath)
+
+        if (!response.ok) {
+          return
+        }
+
+        const blob = await response.blob()
+        const fileType = blob.type || 'image/jpeg'
+        const sourceFile = new File([blob], currentWorkspace.imageName, { type: fileType })
+        const normalizedFile = await ensureLandscapeFile(sourceFile)
+
+        if (cancelled || normalizedFile === sourceFile) {
+          return
+        }
+
+        const reuploaded = await uploadWorkspaceImage(normalizedFile, fetch, async (file) => file)
+
+        if (cancelled) {
+          return
+        }
+
+        normalizedImagePathsRef.current.add(reuploaded.imagePath)
+
+        const restored = await saveWorkspace({
+          ...reuploaded,
+          alignment: currentWorkspace.alignment,
+        })
+
+        if (cancelled) {
+          return
+        }
+
+        setWorkspace(restored)
+        setDraftAlignment(restored.alignment)
+        setStatus('Saved image was rotated so the long side runs horizontally.')
+      } catch {
+        // Leave the original image in place; UI still works.
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [workspace])
+
+  function handleUploadRequest() {
+    fileInputRef.current?.click()
+  }
+
+  async function handleFileSelection(event: React.ChangeEvent<HTMLInputElement>) {
+    const [file] = Array.from(event.target.files ?? [])
+    event.target.value = ''
+
+    if (!file) {
+      return
+    }
+
+    setIsBusy(true)
+
+    try {
+      const nextWorkspace = await uploadWorkspaceImage(file, fetch, ensureLandscapeFile)
+
+      normalizedImagePathsRef.current.add(nextWorkspace.imagePath)
+      setWorkspace(nextWorkspace)
+      setDraftAlignment(nextWorkspace.alignment)
+      setStatus('Image saved locally. Click the stage, drag the guide, or use arrow keys to align it in real time.')
     } catch {
-      clearTemporaryImage()
-      setTemporaryImage({
-        name: file.name,
-        url: URL.createObjectURL(file),
-      })
-      setCurrentBreadboardName(undefined)
-      setLibraryStatus('The folder could not be written to. The image is loaded temporarily in this tab.')
+      setStatus('Could not save the selected image into local repo storage.')
+    } finally {
+      setIsBusy(false)
     }
   }
 
-  function handleSavedBreadboardSelected(breadboardName: string) {
-    clearTemporaryImage()
-    setCurrentBreadboardName(breadboardName)
+  function updatePreviewRotation(delta: number) {
+    if (!workspace || delta === 0) {
+      return
+    }
+
+    setDraftAlignment((currentAlignment) => ({
+      rotationDegrees: currentAlignment.rotationDegrees + delta,
+      referencePoints: null,
+    }))
+    setStatus('Rotation preview updated live. Save alignment to bake this rotation into the stored image.')
   }
 
-  const savedBreadboardCountLabel = `${savedBreadboards.length} saved`
+  function handleRotateLeft(multiplier = 1) {
+    updatePreviewRotation(-rotationStep * multiplier)
+  }
+
+  function handleRotateRight(multiplier = 1) {
+    updatePreviewRotation(rotationStep * multiplier)
+  }
+
+  function handleGuideLineChange(nextPercent: number) {
+    setGuideLinePercent(clampGuideLinePercent(nextPercent))
+  }
+
+  function handleNudgeGuideLine(direction: -1 | 1, multiplier = 1) {
+    setGuideLinePercent((currentValue) =>
+      clampGuideLinePercent(currentValue + direction * guideLineStep * multiplier),
+    )
+    setStatus('Guide line moved. Keep aligning live, then save when the image matches the guide.')
+  }
+
+  function handleResetAlignment() {
+    setDraftAlignment(createDefaultAlignment())
+    setStatus('Rotation preview reset to the saved image orientation.')
+  }
+
+  async function handleSaveAlignment() {
+    if (!workspace) {
+      return
+    }
+
+    setIsBusy(true)
+
+    try {
+      if (Math.abs(draftAlignment.rotationDegrees) < 0.0001) {
+        const savedWorkspace = await saveWorkspace({
+          ...workspace,
+          alignment: createDefaultAlignment(),
+        })
+
+        setWorkspace(savedWorkspace)
+        setDraftAlignment(savedWorkspace.alignment)
+        setStatus('No preview rotation was pending, so the saved image is already current.')
+        return
+      }
+
+      const response = await fetch(workspace.imagePath)
+
+      if (!response.ok) {
+        throw new Error('Could not load the current image for rotation.')
+      }
+
+      const blob = await response.blob()
+      const sourceFile = new File([blob], workspace.imageName, { type: blob.type || 'image/jpeg' })
+      const rotatedFile = await rotateImageFile(sourceFile, draftAlignment.rotationDegrees)
+      const uploadedWorkspace = await uploadWorkspaceImage(rotatedFile, fetch, async (file) => file)
+
+      normalizedImagePathsRef.current.add(uploadedWorkspace.imagePath)
+      setWorkspace(uploadedWorkspace)
+      setDraftAlignment(createDefaultAlignment())
+      setStatus('Rotation saved into the image. Future app loads use the newly rotated file directly.')
+    } catch {
+      setStatus('Could not save the rotated image into local repo storage.')
+    } finally {
+      setIsBusy(false)
+    }
+  }
 
   return (
     <main className="app-shell">
-      <section className="workspace" aria-label="Project workspace">
-        <section className="workspace-top">
-          <section className="sidebar-intro workspace-copy">
-            <p className="eyebrow">Breadboard Projects</p>
-            <h1>Diagram your hardware project with a clean visual workspace.</h1>
-            <p className="header-copy">
-              Save breadboard screenshots into a reusable local library, then swap
-              between them as you work on different builds.
-            </p>
-          </section>
-
-          <section className="workspace-panel workspace-panel--secondary">
-            <div className="panel-heading">
-              <div>
-                <p className="panel-kicker">Inspector</p>
-                <h2>Project details</h2>
-              </div>
-            </div>
-            <div className="inspector-card">
-              <p className="inspector-label">Current image</p>
-              <p className="inspector-value">{imageName ?? 'No breadboard selected yet'}</p>
-              <p className="inspector-label">Library folder</p>
-              <p className="inspector-value">{libraryFolderName ?? 'Not connected'}</p>
-            </div>
-          </section>
-
-          <section className="workspace-panel workspace-panel--secondary">
-            <div className="panel-heading">
-              <div>
-                <p className="panel-kicker">Library</p>
-                <h2>Saved boards</h2>
-              </div>
-              <span className="panel-status">{savedBreadboardCountLabel}</span>
-            </div>
-            <div className="library-panel">
-              <button type="button" className="action-button" onClick={() => void chooseLibraryFolder()}>
-                {libraryFolderName ? 'Change folder' : 'Choose folder'}
-              </button>
-              <p className="library-status">{libraryStatus}</p>
-              {savedBreadboards.length > 0 ? (
-                <div className="saved-board-list" aria-label="Saved breadboard library">
-                  {savedBreadboards.map((breadboard) => (
-                    <button
-                      key={breadboard.name}
-                      type="button"
-                      className={`saved-board-card${breadboard.name === currentBreadboardName ? ' saved-board-card--active' : ''}`}
-                      onClick={() => handleSavedBreadboardSelected(breadboard.name)}
-                    >
-                      <img
-                        className="saved-board-thumbnail"
-                        src={breadboard.url}
-                        alt={`Saved breadboard ${breadboard.name}`}
-                      />
-                      <span className="saved-board-name">{breadboard.name}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="blank-state blank-state--library">
-                  <p>No saved breadboards yet. The next uploaded image will be copied into your chosen folder.</p>
-                </div>
-              )}
-            </div>
-          </section>
-        </section>
-
-        <section
-          className={`workspace-panel workspace-panel--primary workspace-panel--breadboard${imageSrc ? '' : ' workspace-panel--breadboard-empty'}`}
-        >
-          <div className="panel-heading">
-            <div>
-              <p className="panel-kicker">Breadboard View</p>
-              <h2>Main board</h2>
-              <span className="panel-status panel-status--board">
-                {imageSrc ? imageName ?? 'Image loaded' : 'Select an image'}
-              </span>
-            </div>
-          </div>
-          <BreadboardCanvas imageSrc={imageSrc} imageName={imageName} onImageSelected={handleImageSelected} />
-        </section>
-      </section>
+      <input
+        ref={fileInputRef}
+        className="visually-hidden"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        aria-label="Upload breadboard image"
+        onChange={handleFileSelection}
+      />
+      <ImageWorkspace
+        imageName={workspace?.imageName}
+        imagePath={workspace?.imagePath}
+        rotationDegrees={draftAlignment.rotationDegrees}
+        guideLinePercent={guideLinePercent}
+        rotationStep={rotationStep}
+        guideLineStep={guideLineStep}
+        isBusy={isBusy}
+        isSaveDisabled={!hasUnsavedAlignment}
+        status={status}
+        onUploadRequest={handleUploadRequest}
+        onGuideLineChange={handleGuideLineChange}
+        onRotationStepChange={setRotationStep}
+        onGuideLineStepChange={setGuideLineStep}
+        onRotateLeft={handleRotateLeft}
+        onRotateRight={handleRotateRight}
+        onNudgeGuideLine={handleNudgeGuideLine}
+        onResetAlignment={handleResetAlignment}
+        onSaveAlignment={handleSaveAlignment}
+      />
     </main>
   )
 }

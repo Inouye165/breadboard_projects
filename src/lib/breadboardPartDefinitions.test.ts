@@ -1,9 +1,8 @@
-import { describe, expect, it } from 'vitest'
-
 import {
   createBreadboardPartDefinition,
   createStandardBreadboardTemplate,
   fitAnchorPoint,
+  moveBreadboardAllRegions,
   moveBreadboardColumn,
   moveBreadboardPoint,
   moveBreadboardRegion,
@@ -76,10 +75,29 @@ describe('breadboardPartDefinitions', () => {
   it('moves regions by updating all anchor-mapped point coordinates', () => {
     const definition = createTestDefinition()
     const original = definition.points.find((point) => point.id === 'A1')
+    const originalSibling = definition.points.find((point) => point.id === 'E60')
+    const originalOutsideRegion = definition.points.find((point) => point.id === 'F1')
     const movedRegion = moveBreadboardRegion(definition, 'upper-terminal-strip', 0.01, 0.02)
 
     expect(movedRegion.points.find((point) => point.id === 'A1')?.x).toBeCloseTo((original?.x ?? 0) + 0.01)
     expect(movedRegion.points.find((point) => point.id === 'A1')?.y).toBeCloseTo((original?.y ?? 0) + 0.02)
+    expect(movedRegion.points.find((point) => point.id === 'E60')?.x).toBeCloseTo((originalSibling?.x ?? 0) + 0.01)
+    expect(movedRegion.points.find((point) => point.id === 'E60')?.y).toBeCloseTo((originalSibling?.y ?? 0) + 0.02)
+    expect(movedRegion.points.find((point) => point.id === 'F1')?.x).toBeCloseTo(originalOutsideRegion?.x ?? 0)
+  })
+
+  it('moves all breadboard regions together', () => {
+    const definition = createTestDefinition()
+    const originalTop = definition.points.find((point) => point.id === 'top-power-rails:top-positive:1')
+    const originalUpper = definition.points.find((point) => point.id === 'A1')
+    const originalLower = definition.points.find((point) => point.id === 'F1')
+    const originalBottom = definition.points.find((point) => point.id === 'bottom-power-rails:bottom-negative:60')
+    const moved = moveBreadboardAllRegions(definition, 0.01, -0.015)
+
+    expect(moved.points.find((point) => point.id === 'top-power-rails:top-positive:1')?.x).toBeCloseTo((originalTop?.x ?? 0) + 0.01)
+    expect(moved.points.find((point) => point.id === 'A1')?.x).toBeCloseTo((originalUpper?.x ?? 0) + 0.01)
+    expect(moved.points.find((point) => point.id === 'F1')?.x).toBeCloseTo((originalLower?.x ?? 0) + 0.01)
+    expect(moved.points.find((point) => point.id === 'bottom-power-rails:bottom-negative:60')?.y).toBeCloseTo((originalBottom?.y ?? 0) - 0.015)
   })
 
   it('rotates a region overlay without changing the image', () => {
@@ -102,12 +120,14 @@ describe('breadboardPartDefinitions', () => {
   it('updates row, column, and point offsets independently', () => {
     const definition = createTestDefinition()
     const original = definition.points.find((point) => point.id === 'A1')
+    const originalNeighbor = definition.points.find((point) => point.id === 'A2')
     const rowMoved = moveBreadboardRow(definition, 'upper-terminal-strip', 'A', 0, 0.01)
     const columnMoved = moveBreadboardColumn(rowMoved, 'upper-terminal-strip', '1', 0.02)
     const pointMoved = moveBreadboardPoint(columnMoved, 'upper-terminal-strip', 'A1', 0.01, -0.01)
 
     expect(pointMoved.points.find((point) => point.id === 'A1')?.x).toBeCloseTo((original?.x ?? 0) + 0.03)
     expect(pointMoved.points.find((point) => point.id === 'A1')?.y).toBeCloseTo(original?.y ?? 0)
+    expect(pointMoved.points.find((point) => point.id === 'A2')?.x).toBeCloseTo(originalNeighbor?.x ?? 0)
   })
 
   it('keeps generated point coordinates normalized', () => {

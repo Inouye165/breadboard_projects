@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { vi } from 'vitest'
 
 import { BreadboardCanvas } from './BreadboardCanvas'
 
@@ -11,9 +11,9 @@ describe('BreadboardCanvas', () => {
       screen.getByRole('heading', {
         name: /add a breadboard screenshot to begin/i,
       }),
-    ).toBeInTheDocument()
-    expect(screen.getByLabelText(/breadboard upload prompt/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /choose image/i })).toBeInTheDocument()
+    ).toBeTruthy()
+    expect(screen.getByLabelText(/breadboard upload prompt/i)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /choose image/i })).toBeTruthy()
   })
 
   it('renders the supplied breadboard image', () => {
@@ -22,11 +22,11 @@ describe('BreadboardCanvas', () => {
     )
     const view = within(container)
 
-    expect(view.getByLabelText(/part editor/i)).toBeInTheDocument()
-    expect(view.getByRole('button', { name: /replace image/i })).toBeInTheDocument()
-    expect(view.getByRole('button', { name: /save aligned definition/i })).toBeInTheDocument()
-    expect(view.getByRole('combobox', { name: /^region$/i })).toBeInTheDocument()
-    expect(view.getByRole('button', { name: /upper terminal strip top left anchor/i })).toBeInTheDocument()
+    expect(view.getByLabelText(/part editor/i)).toBeTruthy()
+    expect(view.getByRole('button', { name: /replace image/i })).toBeTruthy()
+    expect(view.getByRole('button', { name: /save aligned definition/i })).toBeTruthy()
+    expect(view.getByRole('combobox', { name: /^region$/i })).toBeTruthy()
+    expect(view.getByRole('button', { name: /upper terminal strip top left anchor/i })).toBeTruthy()
   })
 
   it('forwards a selected file from the fallback input', () => {
@@ -96,7 +96,7 @@ describe('BreadboardCanvas', () => {
       <BreadboardCanvas imageSrc="/example-board.png" imageName="autosaved-board" onImageSelected={vi.fn()} />,
     )
 
-    expect(screen.getByText(/restored your saved calibration for this board/i)).toBeInTheDocument()
+    expect(screen.getByText(/restored your saved calibration for this board/i)).toBeTruthy()
     expect(screen.getAllByRole('button', { name: /^connection point a1$/i }).length).toBeGreaterThan(0)
   })
 })

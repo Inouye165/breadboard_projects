@@ -4,6 +4,7 @@ import { PartCanvas } from './PartCanvas'
 import {
   applyBreadboardRegionAnchors,
   createBreadboardPartDefinition,
+  moveBreadboardAllRegions,
   moveBreadboardColumn,
   moveBreadboardPoint,
   moveBreadboardRegion,
@@ -103,12 +104,13 @@ export function PartEditor({
   const [selectedRowId, setSelectedRowId] = useState('')
   const [selectedColumnId, setSelectedColumnId] = useState('')
   const [selectedPointId, setSelectedPointId] = useState('')
+  const [moveAllRegions, setMoveAllRegions] = useState(!savedDefinition)
   const [showDebugPoints, setShowDebugPoints] = useState(true)
   const [showLabels, setShowLabels] = useState(false)
   const [statusMessage, setStatusMessage] = useState(
     savedDefinition
       ? 'Restored your saved calibration for this board.'
-      : 'Generated a standard breadboard template. Drag anchors until the overlay matches the image.',
+      : 'Generated a standard breadboard template. Start with whole-board alignment, then fine-tune each region.',
   )
 
   useEffect(() => {
@@ -136,10 +138,6 @@ export function PartEditor({
       : (selectedRegion?.pointIds[0] ?? '')
 
   const highlightedPointIds = useMemo(() => {
-    if (showDebugPoints) {
-      return definition.points.map((point) => point.id)
-    }
-
     if (!selectedRegion) {
       return []
     }
@@ -157,10 +155,14 @@ export function PartEditor({
     }
 
     return selectedRegion.pointIds
-  }, [definition.points, effectiveSelectedColumnId, effectiveSelectedPointId, effectiveSelectedRowId, selectedRegion, selectedScope, showDebugPoints])
+  }, [effectiveSelectedColumnId, effectiveSelectedPointId, effectiveSelectedRowId, selectedRegion, selectedScope])
 
   function applyNudge(delta: Position) {
     setDefinition((currentDefinition) => {
+      if (moveAllRegions) {
+        return moveBreadboardAllRegions(currentDefinition, delta.x, delta.y)
+      }
+
       if (!effectiveSelectedRegionId) {
         return currentDefinition
       }
@@ -184,7 +186,6 @@ export function PartEditor({
   function handlePointPointerDown(pointId: string) {
     const selection = getPointSelection(definition, pointId)
 
-    setSelectedScope('point')
     setSelectedRegionId(selection.regionId ?? '')
     setSelectedRowId(selection.rowId ?? '')
     setSelectedColumnId(selection.columnId ?? '')
@@ -227,10 +228,49 @@ export function PartEditor({
     })
   }
 
+  function handleMoveAllRegionsToggle() {
+    const nextValue = !moveAllRegions
+
+    setMoveAllRegions(nextValue)
+
+    if (nextValue) {
+      setSelectedScope('region')
+      setStatusMessage('Whole-board alignment is active. Drag anywhere on the overlay to move all regions together.')
+      return
+    }
+
+    setStatusMessage('Whole-board alignment is off. Fine-tune the selected region, row, column, or point.')
+  }
+
   function handleRegionDrag(regionId: string, delta: Position) {
     setSelectedScope('region')
     setSelectedRegionId(regionId)
-    setDefinition((currentDefinition) => moveBreadboardRegion(currentDefinition, regionId, delta.x, delta.y))
+    setDefinition((currentDefinition) =>
+      moveAllRegions
+        ? moveBreadboardAllRegions(currentDefinition, delta.x, delta.y)
+        : moveBreadboardRegion(currentDefinition, regionId, delta.x, delta.y),
+    )
+  }
+
+  function handleBoardDrag(delta: Position) {
+    setSelectedScope('region')
+    setDefinition((currentDefinition) => moveBreadboardAllRegions(currentDefinition, delta.x, delta.y))
+  }
+
+  function handleRowDrag(regionId: string, rowId: string, delta: Position) {
+    setSelectedScope('row')
+    setSelectedRegionId(regionId)
+    setSelectedRowId(rowId)
+    setDefinition((currentDefinition) => moveBreadboardRow(currentDefinition, regionId, rowId, delta.x, delta.y))
+  }
+
+  function handleColumnDrag(regionId: string, columnId: string, delta: Position) {
+    setSelectedScope('column')
+    setSelectedRegionId(regionId)
+    setSelectedColumnId(columnId)
+    setDefinition((currentDefinition) =>
+      moveBreadboardColumn(currentDefinition, regionId, columnId, delta.x, delta.y),
+    )
   }
 
   function handleAnchorDrag(
@@ -238,16 +278,16 @@ export function PartEditor({
     anchorKey: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight',
     delta: Position,
   ) {
-    const region = getPartRegion(definition, regionId)
-
-    if (!region) {
-      return
-    }
-
     setSelectedScope('region')
     setSelectedRegionId(regionId)
-    setDefinition((currentDefinition) =>
-      applyBreadboardRegionAnchors(
+    setDefinition((currentDefinition) => {
+      const region = getPartRegion(currentDefinition, regionId)
+
+      if (!region) {
+        return currentDefinition
+      }
+
+      return applyBreadboardRegionAnchors(
         currentDefinition,
         regionId,
         region.anchors.map((anchor) =>
@@ -259,8 +299,8 @@ export function PartEditor({
               }
             : anchor,
         ),
-      ),
-    )
+      )
+    })
   }
 
   function handlePointDrag(pointId: string, delta: Position) {
@@ -371,6 +411,18 @@ export function PartEditor({
             <option value="column">Single column</option>
             <option value="point">Single point</option>
           </select>
+          <div className="part-editor__toolbar">
+            <button
+              type="button"
+              className={`ghost-button${moveAllRegions ? ' ghost-button--active' : ''}`}
+              onClick={handleMoveAllRegionsToggle}
+            >
+              {moveAllRegions ? 'Moving all regions together' : 'Move all regions together'}
+            </button>
+          </div>
+          <p className="part-editor__hint">
+            Start with whole-board alignment, then switch this off for per-region fine tuning.
+          </p>
           {selectedScope === 'row' ? (
             <select
               className="part-editor__select"
@@ -510,6 +562,8 @@ export function PartEditor({
           definition={definition}
           showPoints={showDebugPoints}
           showLabels={showLabels}
+          interactionMode={selectedScope}
+          moveAllRegions={moveAllRegions}
           highlightedPointIds={highlightedPointIds}
           selectedRegionId={effectiveSelectedRegionId}
           selectedRowId={selectedScope === 'row' ? effectiveSelectedRowId : undefined}
@@ -517,8 +571,11 @@ export function PartEditor({
           selectedPointId={selectedScope === 'point' ? effectiveSelectedPointId : undefined}
           onPointPointerDown={handlePointPointerDown}
           onPointDrag={handlePointDrag}
+          onRowDrag={handleRowDrag}
+          onColumnDrag={handleColumnDrag}
           onRegionPointerDown={handleRegionSelected}
           onRegionDrag={handleRegionDrag}
+          onBoardDrag={handleBoardDrag}
           onAnchorDrag={handleAnchorDrag}
         />
       </div>

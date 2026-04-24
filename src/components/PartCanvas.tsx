@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { PartDefinition } from '../lib/parts'
 
@@ -9,11 +9,15 @@ type NormalizedPosition = {
 
 type AnchorKey = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight'
 
+type InteractionMode = 'region' | 'row' | 'column' | 'point'
+
 type PartCanvasProps = {
   definition: PartDefinition
   zoom?: number
   showPoints?: boolean
   showLabels?: boolean
+  interactionMode?: InteractionMode
+  moveAllRegions?: boolean
   highlightedPointIds?: string[]
   selectedRegionId?: string
   selectedRowId?: string
@@ -21,8 +25,11 @@ type PartCanvasProps = {
   selectedPointId?: string
   onPointPointerDown?: (pointId: string) => void
   onPointDrag?: (pointId: string, delta: NormalizedPosition) => void
+  onRowDrag?: (regionId: string, rowId: string, delta: NormalizedPosition) => void
+  onColumnDrag?: (regionId: string, columnId: string, delta: NormalizedPosition) => void
   onRegionPointerDown?: (regionId: string) => void
   onRegionDrag?: (regionId: string, delta: NormalizedPosition) => void
+  onBoardDrag?: (delta: NormalizedPosition) => void
   onAnchorDrag?: (regionId: string, anchorKey: AnchorKey, delta: NormalizedPosition) => void
 }
 
@@ -31,7 +38,33 @@ type PartCanvasLayout = {
   boundingHeight: number
   contentWidth: number
   contentHeight: number
-  isRotated: boolean
+  rotationDegrees: 0 | 90 | 180 | 270
+}
+
+type DragState = {
+  kind: 'point' | 'row' | 'column' | 'region' | 'anchor' | 'board'
+  pointId?: string
+  regionId?: string
+  rowId?: string
+  columnId?: string
+  anchorKey?: AnchorKey
+  lastPosition: NormalizedPosition
+  pointerId: number
+}
+
+function getOrderedRegionAnchors(anchors: PartDefinition['metadata']['regions'][number]['anchors']) {
+  const anchorMap = new Map(anchors.map((anchor) => [anchor.key, anchor]))
+
+  return [
+    anchorMap.get('topLeft'),
+    anchorMap.get('topRight'),
+    anchorMap.get('bottomRight'),
+    anchorMap.get('bottomLeft'),
+  ].filter((anchor): anchor is NonNullable<typeof anchor> => Boolean(anchor))
+}
+
+function getDisplayRotationDegrees(definition: PartDefinition): 0 | 90 | 180 | 270 {
+  return definition.metadata.displayRotationDegrees ?? 0
 }
 
 export function PartCanvas({
@@ -39,6 +72,8 @@ export function PartCanvas({
   zoom = 1,
   showPoints = true,
   showLabels = false,
+  interactionMode = 'region',
+  moveAllRegions = false,
   highlightedPointIds = [],
   selectedRegionId,
   selectedRowId,
@@ -46,37 +81,34 @@ export function PartCanvas({
   selectedPointId,
   onPointPointerDown,
   onPointDrag,
+  onRowDrag,
+  onColumnDrag,
   onRegionPointerDown,
   onRegionDrag,
+  onBoardDrag,
   onAnchorDrag,
 }: PartCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const resizeObserverRef = useRef<ResizeObserver | undefined>(undefined)
-  const dragStateRef = useRef<{
-    kind: 'point' | 'region' | 'anchor'
-    pointId?: string
-    regionId?: string
-    anchorKey?: AnchorKey
-    lastPosition: NormalizedPosition
-    pointerId: number
-  }>()
+  const dragStateRef = useRef<DragState>()
   const [layout, setLayout] = useState<PartCanvasLayout>()
-  const highlightedPointIdSet = new Set(highlightedPointIds)
-  const pointMap = new Map(definition.points.map((point) => [point.id, point]))
+  const highlightedPointIdSet = useMemo(() => new Set(highlightedPointIds), [highlightedPointIds])
+  const pointMap = useMemo(() => new Map(definition.points.map((point) => [point.id, point])), [definition.points])
 
   const getNormalizedPosition = useCallback((
     event: Pick<PointerEvent, 'clientX' | 'clientY'> | React.PointerEvent<SVGElement>,
   ) => {
-    const containerElement = containerRef.current
+    const contentElement = contentRef.current
 
-    if (!containerElement) {
+    if (!contentElement) {
       return {
         x: 0,
         y: 0,
       }
     }
 
-    const bounds = containerElement.getBoundingClientRect()
+    const bounds = contentElement.getBoundingClientRect()
 
     if (!bounds.width || !bounds.height) {
       return {
@@ -90,10 +122,24 @@ export function PartCanvas({
       y: Math.min(1, Math.max(0, (event.clientY - bounds.top) / bounds.height)),
     }
 
-    if (layout?.isRotated) {
+    if (layout?.rotationDegrees === 90) {
       return {
         x: normalizedDisplayPosition.y,
         y: 1 - normalizedDisplayPosition.x,
+      }
+    }
+
+    if (layout?.rotationDegrees === 180) {
+      return {
+        x: 1 - normalizedDisplayPosition.x,
+        y: 1 - normalizedDisplayPosition.y,
+      }
+    }
+
+    if (layout?.rotationDegrees === 270) {
+      return {
+        x: 1 - normalizedDisplayPosition.y,
+        y: normalizedDisplayPosition.x,
       }
     }
 
@@ -101,13 +147,14 @@ export function PartCanvas({
       x: normalizedDisplayPosition.x,
       y: normalizedDisplayPosition.y,
     }
-  }, [layout?.isRotated])
+  }, [layout?.rotationDegrees])
 
   useEffect(() => {
     function updateLayout() {
       const containerElement = containerRef.current
       const { imageWidth, imageHeight } = definition
-      const isRotated = imageHeight > imageWidth
+      const rotationDegrees = getDisplayRotationDegrees(definition)
+      const isRotated = rotationDegrees === 90 || rotationDegrees === 270
       const displayWidth = isRotated ? imageHeight : imageWidth
       const displayHeight = isRotated ? imageWidth : imageHeight
 
@@ -120,7 +167,7 @@ export function PartCanvas({
           boundingHeight: displayHeight * zoom,
           contentWidth: imageWidth * zoom,
           contentHeight: imageHeight * zoom,
-          isRotated,
+          rotationDegrees,
         })
         return
       }
@@ -132,7 +179,7 @@ export function PartCanvas({
         boundingHeight: displayHeight * scale,
         contentWidth: imageWidth * scale,
         contentHeight: imageHeight * scale,
-        isRotated,
+        rotationDegrees,
       })
     }
 
@@ -170,8 +217,20 @@ export function PartCanvas({
         onPointDrag?.(dragState.pointId, delta)
       }
 
+      if (dragState.kind === 'row' && dragState.regionId && dragState.rowId) {
+        onRowDrag?.(dragState.regionId, dragState.rowId, delta)
+      }
+
+      if (dragState.kind === 'column' && dragState.regionId && dragState.columnId) {
+        onColumnDrag?.(dragState.regionId, dragState.columnId, delta)
+      }
+
       if (dragState.kind === 'region' && dragState.regionId) {
         onRegionDrag?.(dragState.regionId, delta)
+      }
+
+      if (dragState.kind === 'board') {
+        onBoardDrag?.(delta)
       }
 
       if (dragState.kind === 'anchor' && dragState.regionId && dragState.anchorKey) {
@@ -199,16 +258,72 @@ export function PartCanvas({
       window.removeEventListener('pointermove', handleWindowPointerMove)
       window.removeEventListener('pointerup', handleWindowPointerUp)
     }
-  }, [getNormalizedPosition, onAnchorDrag, onPointDrag, onRegionDrag])
+  }, [getNormalizedPosition, onAnchorDrag, onBoardDrag, onColumnDrag, onPointDrag, onRegionDrag, onRowDrag])
 
   function handlePointPointerDown(
     event: React.PointerEvent<SVGCircleElement>,
     pointId: string,
   ) {
+    const point = pointMap.get(pointId)
+    const nextPosition = getNormalizedPosition(event)
+
+    if (!point) {
+      return
+    }
+
+    if (moveAllRegions) {
+      dragStateRef.current = {
+        kind: 'board',
+        lastPosition: nextPosition,
+        pointerId: event.pointerId,
+      }
+
+      onPointPointerDown?.(pointId)
+      return
+    }
+
+    if (interactionMode === 'region' && point.regionId) {
+      dragStateRef.current = {
+        kind: 'region',
+        regionId: point.regionId,
+        lastPosition: nextPosition,
+        pointerId: event.pointerId,
+      }
+
+      onPointPointerDown?.(pointId)
+      return
+    }
+
+    if (interactionMode === 'row' && point.regionId && point.rowId) {
+      dragStateRef.current = {
+        kind: 'row',
+        regionId: point.regionId,
+        rowId: point.rowId,
+        lastPosition: nextPosition,
+        pointerId: event.pointerId,
+      }
+
+      onPointPointerDown?.(pointId)
+      return
+    }
+
+    if (interactionMode === 'column' && point.regionId && point.columnId) {
+      dragStateRef.current = {
+        kind: 'column',
+        regionId: point.regionId,
+        columnId: point.columnId,
+        lastPosition: nextPosition,
+        pointerId: event.pointerId,
+      }
+
+      onPointPointerDown?.(pointId)
+      return
+    }
+
     dragStateRef.current = {
       kind: 'point',
       pointId,
-      lastPosition: getNormalizedPosition(event),
+      lastPosition: nextPosition,
       pointerId: event.pointerId,
     }
 
@@ -220,8 +335,8 @@ export function PartCanvas({
     regionId: string,
   ) {
     dragStateRef.current = {
-      kind: 'region',
-      regionId,
+      kind: moveAllRegions ? 'board' : 'region',
+      regionId: moveAllRegions ? undefined : regionId,
       lastPosition: getNormalizedPosition(event),
       pointerId: event.pointerId,
     }
@@ -245,6 +360,18 @@ export function PartCanvas({
     onRegionPointerDown?.(regionId)
   }
 
+  function handleBoardPointerDown(event: React.PointerEvent<SVGRectElement>) {
+    if (!moveAllRegions) {
+      return
+    }
+
+    dragStateRef.current = {
+      kind: 'board',
+      lastPosition: getNormalizedPosition(event),
+      pointerId: event.pointerId,
+    }
+  }
+
   return (
     <div ref={containerRef} className="part-canvas" aria-label={`${definition.name} canvas`}>
       {layout ? (
@@ -256,10 +383,17 @@ export function PartCanvas({
           }}
         >
           <div
-            className={`part-canvas__content${layout.isRotated ? ' part-canvas__content--rotated' : ''}`}
+            ref={contentRef}
+            data-testid="part-canvas-content"
+            className={`part-canvas__content${layout.rotationDegrees === 90 || layout.rotationDegrees === 270 ? ' part-canvas__content--rotated' : ''}`}
             style={{
               width: `${layout.contentWidth}px`,
               height: `${layout.contentHeight}px`,
+              transform: layout.rotationDegrees === 180
+                ? 'rotate(180deg)'
+                : layout.rotationDegrees === 90 || layout.rotationDegrees === 270
+                  ? `translate(-50%, -50%) rotate(${layout.rotationDegrees}deg)`
+                  : undefined,
             }}
           >
             <img
@@ -274,9 +408,15 @@ export function PartCanvas({
               viewBox={`0 0 ${definition.imageWidth} ${definition.imageHeight}`}
               aria-label={`${definition.name} connection points overlay`}
             >
-              <rect width={definition.imageWidth} height={definition.imageHeight} fill="transparent" />
+              <rect
+                className={moveAllRegions ? 'part-canvas__board-hit part-canvas__board-hit--active' : 'part-canvas__board-hit'}
+                width={definition.imageWidth}
+                height={definition.imageHeight}
+                fill="transparent"
+                onPointerDown={handleBoardPointerDown}
+              />
               {(definition.metadata.regions ?? []).map((region) => {
-                const polygonPoints = region.anchors
+                const polygonPoints = getOrderedRegionAnchors(region.anchors)
                   .map((anchor) => `${anchor.x * definition.imageWidth},${anchor.y * definition.imageHeight}`)
                   .join(' ')
                 const isSelectedRegion = region.id === selectedRegionId
@@ -348,14 +488,22 @@ export function PartCanvas({
                 const isHighlighted = highlightedPointIdSet.has(point.id)
                 const isSelected = point.id === selectedPointId
                 const isVisible = showPoints || isHighlighted || isSelected
+                const pointClassName = [
+                  'part-canvas__point',
+                  isVisible ? 'part-canvas__point--visible' : '',
+                  showPoints ? 'part-canvas__point--debug' : '',
+                  isHighlighted ? 'part-canvas__point--highlighted' : '',
+                  isSelected ? 'part-canvas__point--selected' : '',
+                ].filter(Boolean).join(' ')
+                const pointRadius = isSelected ? 5 : isHighlighted ? 4 : 2.5
 
                 return (
                   <g key={point.id} data-point-id={point.id}>
                     <circle
-                      className={`part-canvas__point${isVisible ? ' part-canvas__point--visible' : ''}${isHighlighted || isSelected ? ' part-canvas__point--selected' : ''}`}
+                      className={pointClassName}
                       cx={pointX}
                       cy={pointY}
-                      r={isHighlighted || isSelected ? 7 : 5}
+                      r={pointRadius}
                     />
                     <circle
                       className="part-canvas__point-hit"
