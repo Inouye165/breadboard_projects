@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { BreadboardCanvas } from './BreadboardCanvas'
@@ -17,15 +17,16 @@ describe('BreadboardCanvas', () => {
   })
 
   it('renders the supplied breadboard image', () => {
-    render(
-      <BreadboardCanvas imageSrc="/example-board.png" onImageSelected={vi.fn()} />,
+    const { container } = render(
+      <BreadboardCanvas imageSrc="/example-board.png" imageName="main-board" onImageSelected={vi.fn()} />,
     )
+    const view = within(container)
 
-    expect(screen.getByRole('img', { name: /uploaded breadboard reference/i })).toHaveAttribute(
-      'src',
-      '/example-board.png',
-    )
-    expect(screen.getByRole('button', { name: /replace image/i })).toBeInTheDocument()
+    expect(view.getByLabelText(/part editor/i)).toBeInTheDocument()
+    expect(view.getByRole('button', { name: /replace image/i })).toBeInTheDocument()
+    expect(view.getByRole('button', { name: /(show|hide) points/i })).toBeInTheDocument()
+    expect(view.getByRole('button', { name: /save part definition/i })).toBeInTheDocument()
+    expect(view.getByLabelText(/part kind/i)).toHaveValue('breadboard')
   })
 
   it('forwards a selected file from the fallback input', () => {
@@ -41,5 +42,18 @@ describe('BreadboardCanvas', () => {
     fireEvent.change(input!, { target: { files: [file] } })
 
     expect(onImageSelected).toHaveBeenCalledWith(file)
+  })
+
+  it('supports switching to manual placement for non-breadboard parts', () => {
+    render(
+      <BreadboardCanvas imageSrc="/example-board.png" imageName="module-board" onImageSelected={vi.fn()} />,
+    )
+
+    fireEvent.change(screen.getByLabelText(/part kind/i), {
+      target: { value: 'module' },
+    })
+
+    expect(screen.getByRole('button', { name: /add point/i })).toBeInTheDocument()
+    expect(screen.getByText(/ready for manual point placement/i)).toBeInTheDocument()
   })
 })

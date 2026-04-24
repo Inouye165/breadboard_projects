@@ -1,7 +1,162 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { PartEditor } from './PartEditor'
+import { DEFAULT_BREADBOARD_IMAGE_HEIGHT, DEFAULT_BREADBOARD_IMAGE_WIDTH } from '../lib/breadboardPartDefinitions'
+
+function pixelHasVisibleContent(data: Uint8ClampedArray, offset: number) {
+  const alpha = data[offset + 3]
+
+  if (alpha < 20) {
+    return false
+  }
+
+  const red = data[offset]
+  const green = data[offset + 1]
+  const blue = data[offset + 2]
+  const brightness = (red + green + blue) / 3
+  const chroma = Math.max(red, green, blue) - Math.min(red, green, blue)
+
+  return brightness < 248 || chroma > 10
+}
+
+async function buildDisplayImage(source: string) {
+  const image = new Image()
+  image.decoding = 'async'
+
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve()
+    image.onerror = () => reject(new Error('Unable to load image for display.'))
+    image.src = source
+  })
+
+  const canvas = document.createElement('canvas')
+  canvas.width = image.naturalWidth
+  canvas.height = image.naturalHeight
+
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+
+  if (!context) {
+    return {
+      src: source,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+    }
+  }
+
+  context.drawImage(image, 0, 0)
+
+  const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height)
+  let top = 0
+  let bottom = height - 1
+  let left = 0
+  let right = width - 1
+
+  function rowHasContent(rowIndex: number) {
+    for (let columnIndex = 0; columnIndex < width; columnIndex += 1) {
+      if (pixelHasVisibleContent(data, (rowIndex * width + columnIndex) * 4)) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  function columnHasContent(columnIndex: number) {
+    for (let rowIndex = 0; rowIndex < height; rowIndex += 1) {
+      if (pixelHasVisibleContent(data, (rowIndex * width + columnIndex) * 4)) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  while (top < height && !rowHasContent(top)) {
+    top += 1
+  }
+
+  while (bottom > top && !rowHasContent(bottom)) {
+    bottom -= 1
+  }
+
+  while (left < width && !columnHasContent(left)) {
+    left += 1
+  }
+
+  while (right > left && !columnHasContent(right)) {
+    right -= 1
+  }
+
+  const trimmedWidth = right - left + 1
+  const trimmedHeight = bottom - top + 1
+
+  if (
+    trimmedWidth <= 0 ||
+    trimmedHeight <= 0 ||
+    (trimmedWidth === width && trimmedHeight === height)
+  ) {
+    return {
+      src: source,
+      width,
+      height,
+    }
+  }
+
+  const edgePadding = Math.max(8, Math.round(Math.min(width, height) * 0.012))
+  const cropLeft = Math.max(0, left - edgePadding)
+  const cropTop = Math.max(0, top - edgePadding)
+  const cropRight = Math.min(width, right + edgePadding)
+  const cropBottom = Math.min(height, bottom + edgePadding)
+  const cropWidth = cropRight - cropLeft + 1
+  const cropHeight = cropBottom - cropTop + 1
+  const trimmedCanvas = document.createElement('canvas')
+  trimmedCanvas.width = cropWidth
+  trimmedCanvas.height = cropHeight
+
+  const trimmedContext = trimmedCanvas.getContext('2d')
+
+  if (!trimmedContext) {
+    return {
+      src: source,
+      width,
+      height,
+    }
+  }
+
+  trimmedContext.drawImage(
+    canvas,
+    cropLeft,
+    cropTop,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    cropWidth,
+    cropHeight,
+  )
+
+  const trimmedBlob = await new Promise<Blob | null>((resolve) => {
+    trimmedCanvas.toBlob(resolve, 'image/png')
+  })
+
+  if (!trimmedBlob) {
+    return {
+      src: source,
+      width,
+      height,
+    }
+  }
+
+  return {
+    src: URL.createObjectURL(trimmedBlob),
+    width: cropWidth,
+    height: cropHeight,
+  }
+}
+
 type BreadboardCanvasProps = {
   imageSrc?: string
+  imageName?: string
   onImageSelected: (file: File) => void
 }
 
@@ -21,14 +176,26 @@ type PickerWindow = Window & {
   }) => Promise<PickerFileHandle[]>
 }
 
-export function BreadboardCanvas({ imageSrc, onImageSelected }: BreadboardCanvasProps) {
+export function BreadboardCanvas({ imageSrc, imageName, onImageSelected }: BreadboardCanvasProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const imageRef = useRef<HTMLImageElement>(null)
-  const mediaRef = useRef<HTMLDivElement>(null)
   const processedImageUrlRef = useRef<string | undefined>(undefined)
-  const resizeObserverRef = useRef<ResizeObserver | undefined>(undefined)
-  const [displayImageSrc, setDisplayImageSrc] = useState<string>()
-  const [imageStyle, setImageStyle] = useState<React.CSSProperties>()
+  const [processedDisplayImage, setProcessedDisplayImage] = useState<{
+    source: string
+    src: string
+    width: number
+    height: number
+  }>()
+
+  const displayImage = imageSrc
+    ? processedDisplayImage?.source === imageSrc
+      ? processedDisplayImage
+      : {
+          source: imageSrc,
+          src: imageSrc,
+          width: DEFAULT_BREADBOARD_IMAGE_WIDTH,
+          height: DEFAULT_BREADBOARD_IMAGE_HEIGHT,
+        }
+    : undefined
 
   function revokeProcessedImageUrl() {
     if (!processedImageUrlRef.current) {
@@ -39,175 +206,9 @@ export function BreadboardCanvas({ imageSrc, onImageSelected }: BreadboardCanvas
     processedImageUrlRef.current = undefined
   }
 
-  function updateImageLayout() {
-    const mediaElement = mediaRef.current
-    const imageElement = imageRef.current
-
-    if (!mediaElement || !imageElement || !imageElement.naturalWidth || !imageElement.naturalHeight) {
-      setImageStyle(undefined)
-      return
-    }
-
-    const availableWidth = mediaElement.clientWidth
-    const availableHeight = mediaElement.clientHeight
-
-    if (!availableWidth || !availableHeight) {
-      return
-    }
-
-    const scale = Math.min(
-      availableWidth / imageElement.naturalHeight,
-      availableHeight / imageElement.naturalWidth,
-    )
-
-    const rotatedWidth = imageElement.naturalHeight * scale
-    const rotatedHeight = imageElement.naturalWidth * scale
-
-    setImageStyle({
-      width: `${rotatedHeight}px`,
-      height: `${rotatedWidth}px`,
-    })
-  }
-
-  function pixelHasVisibleContent(data: Uint8ClampedArray, offset: number) {
-    const alpha = data[offset + 3]
-
-    if (alpha < 20) {
-      return false
-    }
-
-    const red = data[offset]
-    const green = data[offset + 1]
-    const blue = data[offset + 2]
-    const brightness = (red + green + blue) / 3
-    const chroma = Math.max(red, green, blue) - Math.min(red, green, blue)
-
-    return brightness < 248 || chroma > 10
-  }
-
-  async function buildDisplayImage(source: string) {
-    const image = new Image()
-    image.decoding = 'async'
-
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve()
-      image.onerror = () => reject(new Error('Unable to load image for display.'))
-      image.src = source
-    })
-
-    const canvas = document.createElement('canvas')
-    canvas.width = image.naturalWidth
-    canvas.height = image.naturalHeight
-
-    const context = canvas.getContext('2d', { willReadFrequently: true })
-
-    if (!context) {
-      return source
-    }
-
-    context.drawImage(image, 0, 0)
-
-    const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height)
-    let top = 0
-    let bottom = height - 1
-    let left = 0
-    let right = width - 1
-
-    function rowHasContent(rowIndex: number) {
-      for (let columnIndex = 0; columnIndex < width; columnIndex += 1) {
-        if (pixelHasVisibleContent(data, (rowIndex * width + columnIndex) * 4)) {
-          return true
-        }
-      }
-
-      return false
-    }
-
-    function columnHasContent(columnIndex: number) {
-      for (let rowIndex = 0; rowIndex < height; rowIndex += 1) {
-        if (pixelHasVisibleContent(data, (rowIndex * width + columnIndex) * 4)) {
-          return true
-        }
-      }
-
-      return false
-    }
-
-    while (top < height && !rowHasContent(top)) {
-      top += 1
-    }
-
-    while (bottom > top && !rowHasContent(bottom)) {
-      bottom -= 1
-    }
-
-    while (left < width && !columnHasContent(left)) {
-      left += 1
-    }
-
-    while (right > left && !columnHasContent(right)) {
-      right -= 1
-    }
-
-    const trimmedWidth = right - left + 1
-    const trimmedHeight = bottom - top + 1
-
-    if (
-      trimmedWidth <= 0 ||
-      trimmedHeight <= 0 ||
-      (trimmedWidth === width && trimmedHeight === height)
-    ) {
-      return source
-    }
-
-    const edgePadding = Math.max(8, Math.round(Math.min(width, height) * 0.012))
-    const cropLeft = Math.max(0, left - edgePadding)
-    const cropTop = Math.max(0, top - edgePadding)
-    const cropRight = Math.min(width, right + edgePadding)
-    const cropBottom = Math.min(height, bottom + edgePadding)
-    const cropWidth = cropRight - cropLeft + 1
-    const cropHeight = cropBottom - cropTop + 1
-    const trimmedCanvas = document.createElement('canvas')
-    trimmedCanvas.width = cropWidth
-    trimmedCanvas.height = cropHeight
-
-    const trimmedContext = trimmedCanvas.getContext('2d')
-
-    if (!trimmedContext) {
-      return source
-    }
-
-    trimmedContext.drawImage(
-      canvas,
-      cropLeft,
-      cropTop,
-      cropWidth,
-      cropHeight,
-      0,
-      0,
-      cropWidth,
-      cropHeight,
-    )
-
-    const trimmedBlob = await new Promise<Blob | null>((resolve) => {
-      trimmedCanvas.toBlob(resolve, 'image/png')
-    })
-
-    if (!trimmedBlob) {
-      return source
-    }
-
-    const trimmedImageUrl = URL.createObjectURL(trimmedBlob)
-    processedImageUrlRef.current = trimmedImageUrl
-
-    return trimmedImageUrl
-  }
-
   useEffect(() => {
     if (!imageSrc) {
       revokeProcessedImageUrl()
-      setDisplayImageSrc(undefined)
-      setImageStyle(undefined)
       return
     }
 
@@ -218,19 +219,32 @@ export function BreadboardCanvas({ imageSrc, onImageSelected }: BreadboardCanvas
       revokeProcessedImageUrl()
 
       try {
-        const nextDisplayImageSrc = await buildDisplayImage(sourceImage)
+        const nextDisplayImage = await buildDisplayImage(sourceImage)
+        if (nextDisplayImage.src !== sourceImage) {
+          processedImageUrlRef.current = nextDisplayImage.src
+        }
 
         if (!isActive) {
-          if (nextDisplayImageSrc !== sourceImage) {
-            URL.revokeObjectURL(nextDisplayImageSrc)
+          if (nextDisplayImage.src !== sourceImage) {
+            URL.revokeObjectURL(nextDisplayImage.src)
           }
           return
         }
 
-        setDisplayImageSrc(nextDisplayImageSrc)
+        setProcessedDisplayImage({
+          source: sourceImage,
+          src: nextDisplayImage.src,
+          width: nextDisplayImage.width,
+          height: nextDisplayImage.height,
+        })
       } catch {
         if (isActive) {
-          setDisplayImageSrc(sourceImage)
+          setProcessedDisplayImage({
+            source: sourceImage,
+            src: sourceImage,
+            width: DEFAULT_BREADBOARD_IMAGE_WIDTH,
+            height: DEFAULT_BREADBOARD_IMAGE_HEIGHT,
+          })
         }
       }
     }
@@ -242,29 +256,6 @@ export function BreadboardCanvas({ imageSrc, onImageSelected }: BreadboardCanvas
       revokeProcessedImageUrl()
     }
   }, [imageSrc])
-
-  useEffect(() => {
-    if (!displayImageSrc) {
-      resizeObserverRef.current?.disconnect()
-      setImageStyle(undefined)
-      return
-    }
-
-    updateImageLayout()
-
-    resizeObserverRef.current?.disconnect()
-    resizeObserverRef.current = new ResizeObserver(() => {
-      updateImageLayout()
-    })
-
-    if (mediaRef.current) {
-      resizeObserverRef.current.observe(mediaRef.current)
-    }
-
-    return () => {
-      resizeObserverRef.current?.disconnect()
-    }
-  }, [displayImageSrc])
 
   async function handlePickImage() {
     const pickerWindow = window as PickerWindow
@@ -320,20 +311,16 @@ export function BreadboardCanvas({ imageSrc, onImageSelected }: BreadboardCanvas
       <div className="breadboard-frame">
         {imageSrc ? (
           <div className="breadboard-stage">
-            <div className="breadboard-toolbar breadboard-toolbar--overlay">
-              <button type="button" className="action-button" onClick={handlePickImage}>
-                Replace image
-              </button>
-            </div>
-            <div ref={mediaRef} className="breadboard-media">
-              <img
-                ref={imageRef}
-                className="breadboard-image"
-                src={displayImageSrc ?? imageSrc}
-                alt="Uploaded breadboard reference"
-                style={imageStyle}
-                onLoad={updateImageLayout}
-              />
+            <div className="breadboard-media">
+              {displayImage ? (
+                <PartEditor
+                  imageSrc={displayImage.src}
+                  imageWidth={displayImage.width}
+                  imageHeight={displayImage.height}
+                  imageName={imageName}
+                  onReplaceImage={() => void handlePickImage()}
+                />
+              ) : null}
             </div>
           </div>
         ) : (
