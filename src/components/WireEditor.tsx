@@ -3,8 +3,12 @@ import type React from 'react'
 
 import type { BreadboardDefinition, ConnectionPoint } from '../lib/breadboardDefinitionModel'
 import {
+  PROJECT_COMPONENT_KINDS,
+  createProjectComponentId,
   createWireId,
   type BreadboardProject,
+  type ProjectComponent,
+  type ProjectComponentKind,
   type Wire,
   type WireWaypoint,
 } from '../lib/breadboardProjectModel'
@@ -184,6 +188,40 @@ export function WireEditor({
     onChange({
       ...project,
       name,
+    })
+  }
+
+  function handleAddComponent(kind: ProjectComponentKind, label: string, description: string) {
+    const trimmedLabel = label.trim()
+
+    if (!trimmedLabel) {
+      return
+    }
+
+    const trimmedDescription = description.trim()
+    const newComponent: ProjectComponent = {
+      id: createProjectComponentId(),
+      kind,
+      label: trimmedLabel,
+      description: trimmedDescription ? trimmedDescription : undefined,
+    }
+
+    const nextComponents = [...(project.components ?? []), newComponent]
+
+    onChange({
+      ...project,
+      components: nextComponents,
+    })
+  }
+
+  function handleRemoveComponent(componentId: string) {
+    const nextComponents = (project.components ?? []).filter(
+      (component) => component.id !== componentId,
+    )
+
+    onChange({
+      ...project,
+      components: nextComponents.length === 0 ? undefined : nextComponents,
     })
   }
 
@@ -492,6 +530,121 @@ export function WireEditor({
           </svg>
         </div>
       </section>
+      <ComponentsPanel
+        components={project.components ?? []}
+        isBusy={isBusy}
+        onAdd={handleAddComponent}
+        onRemove={handleRemoveComponent}
+      />
+    </section>
+  )
+}
+
+type ComponentsPanelProps = {
+  components: ProjectComponent[]
+  isBusy: boolean
+  onAdd: (kind: ProjectComponentKind, label: string, description: string) => void
+  onRemove: (componentId: string) => void
+}
+
+function ComponentsPanel({ components, isBusy, onAdd, onRemove }: ComponentsPanelProps) {
+  const [draftKind, setDraftKind] = useState<ProjectComponentKind>('resistor')
+  const [draftLabel, setDraftLabel] = useState('')
+  const [draftDescription, setDraftDescription] = useState('')
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!draftLabel.trim()) {
+      return
+    }
+
+    onAdd(draftKind, draftLabel, draftDescription)
+    setDraftLabel('')
+    setDraftDescription('')
+  }
+
+  return (
+    <section className="components-panel" aria-label="Project components">
+      <header className="components-panel__header">
+        <h2 className="components-panel__title">Components</h2>
+        <p className="components-panel__hint">
+          Track resistors, LEDs, and other parts you place on the breadboard.
+        </p>
+      </header>
+      <form className="components-panel__form" onSubmit={handleSubmit}>
+        <label className="control-group" htmlFor="component-kind">
+          <span className="control-group__label">Type</span>
+          <select
+            id="component-kind"
+            className="control-group__input"
+            value={draftKind}
+            onChange={(event) => setDraftKind(event.target.value as ProjectComponentKind)}
+            disabled={isBusy}
+          >
+            {PROJECT_COMPONENT_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind.charAt(0).toUpperCase() + kind.slice(1)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="control-group" htmlFor="component-label">
+          <span className="control-group__label">Label</span>
+          <input
+            id="component-label"
+            className="control-group__input"
+            type="text"
+            value={draftLabel}
+            onChange={(event) => setDraftLabel(event.target.value)}
+            placeholder="e.g. R1"
+            disabled={isBusy}
+          />
+        </label>
+        <label className="control-group" htmlFor="component-description">
+          <span className="control-group__label">Description (optional)</span>
+          <input
+            id="component-description"
+            className="control-group__input"
+            type="text"
+            value={draftDescription}
+            onChange={(event) => setDraftDescription(event.target.value)}
+            placeholder="e.g. 220Ω"
+            disabled={isBusy}
+          />
+        </label>
+        <button
+          type="submit"
+          className="action-button"
+          disabled={isBusy || draftLabel.trim().length === 0}
+        >
+          Add component
+        </button>
+      </form>
+      {components.length === 0 ? (
+        <p className="components-panel__empty">No components added yet.</p>
+      ) : (
+        <ul className="components-panel__list" aria-label="Component list">
+          {components.map((component) => (
+            <li key={component.id} className="components-panel__item">
+              <span className="components-panel__item-kind">{component.kind}</span>
+              <span className="components-panel__item-label">{component.label}</span>
+              {component.description ? (
+                <span className="components-panel__item-description">{component.description}</span>
+              ) : null}
+              <button
+                type="button"
+                className="action-button action-button--ghost"
+                onClick={() => onRemove(component.id)}
+                disabled={isBusy}
+                aria-label={`Remove component ${component.label}`}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   )
 }

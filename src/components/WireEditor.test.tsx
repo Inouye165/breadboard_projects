@@ -227,8 +227,7 @@ describe('WireEditor', () => {
     expect(updated.wires[0].waypoints).toBeUndefined()
   })
 
-  it('persists a dragged waypoint to its dropped position', () => {
-    const handleChange = vi.fn()
+  it('persists a dragged waypoint to its dropped position', () => {    const handleChange = vi.fn()
 
     render(
       <WireEditor
@@ -257,5 +256,73 @@ describe('WireEditor', () => {
     expect(handleChange).toHaveBeenCalledTimes(1)
     const updated = handleChange.mock.calls[0][0] as BreadboardProject
     expect(updated.wires[0].waypoints).toEqual([{ x: 200, y: 250 }])
+  })
+
+  it('adds a project component through the components panel', () => {
+    const handleChange = vi.fn()
+
+    render(
+      <WireEditor
+        project={makeProject()}
+        breadboard={breadboard}
+        status=""
+        onBack={() => {}}
+        onChange={handleChange}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText(/^Type$/), { target: { value: 'led' } })
+    fireEvent.change(screen.getByLabelText(/^Label$/), { target: { value: 'D1' } })
+    fireEvent.change(screen.getByLabelText(/Description/), { target: { value: 'Red 5mm' } })
+    fireEvent.click(screen.getByRole('button', { name: /Add component/ }))
+
+    expect(handleChange).toHaveBeenCalledTimes(1)
+    const updated = handleChange.mock.calls[0][0] as BreadboardProject
+    expect(updated.components).toHaveLength(1)
+    expect(updated.components![0]).toMatchObject({
+      kind: 'led',
+      label: 'D1',
+      description: 'Red 5mm',
+    })
+  })
+
+  it('does nothing when the component label is blank', () => {
+    const handleChange = vi.fn()
+
+    render(
+      <WireEditor
+        project={makeProject()}
+        breadboard={breadboard}
+        status=""
+        onBack={() => {}}
+        onChange={handleChange}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /Add component/ }).hasAttribute('disabled')).toBe(true)
+  })
+
+  it('removes a component when its Remove button is clicked', () => {
+    const handleChange = vi.fn()
+    const project: BreadboardProject = {
+      ...makeProject(),
+      components: [{ id: 'c-1', kind: 'resistor', label: 'R1', description: '220' }],
+    }
+
+    render(
+      <WireEditor
+        project={project}
+        breadboard={breadboard}
+        status=""
+        onBack={() => {}}
+        onChange={handleChange}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove component R1/ }))
+
+    expect(handleChange).toHaveBeenCalledTimes(1)
+    const updated = handleChange.mock.calls[0][0] as BreadboardProject
+    expect(updated.components).toBeUndefined()
   })
 })

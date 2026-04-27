@@ -1,7 +1,13 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import type { BreadboardProject, Wire } from '../src/lib/breadboardProjectModel'
+import {
+  PROJECT_COMPONENT_KINDS,
+  type BreadboardProject,
+  type ProjectComponent,
+  type ProjectComponentKind,
+  type Wire,
+} from '../src/lib/breadboardProjectModel'
 
 type JsonObject = Record<string, unknown>
 
@@ -51,6 +57,35 @@ function normalizeWire(value: unknown): Wire {
   }
 }
 
+function normalizeProjectComponent(value: unknown): ProjectComponent {
+  if (!isRecord(value)) {
+    throw new Error('Invalid component payload.')
+  }
+
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.kind !== 'string' ||
+    typeof value.label !== 'string'
+  ) {
+    throw new Error('Invalid component payload.')
+  }
+
+  if (!PROJECT_COMPONENT_KINDS.includes(value.kind as ProjectComponentKind)) {
+    throw new Error('Invalid component kind.')
+  }
+
+  if (value.description !== undefined && typeof value.description !== 'string') {
+    throw new Error('Invalid component description.')
+  }
+
+  return {
+    id: value.id,
+    kind: value.kind as ProjectComponentKind,
+    label: value.label,
+    description: value.description as string | undefined,
+  }
+}
+
 function normalizeBreadboardProject(
   value: unknown,
   existingProject?: BreadboardProject,
@@ -74,11 +109,22 @@ function normalizeBreadboardProject(
       : (existingProject?.createdAt ?? new Date().toISOString())
   const updatedAt = new Date().toISOString()
 
+  let components: ProjectComponent[] | undefined
+
+  if (value.components !== undefined) {
+    if (!Array.isArray(value.components)) {
+      throw new Error('Invalid project components.')
+    }
+
+    components = value.components.map(normalizeProjectComponent)
+  }
+
   return {
     id: value.id,
     name: value.name,
     breadboardDefinitionId: value.breadboardDefinitionId,
     wires: value.wires.map(normalizeWire),
+    components,
     createdAt,
     updatedAt,
   }
