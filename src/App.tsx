@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { ImageWorkspace } from './components/ImageWorkspace'
 import { PinPointEditor } from './components/PinPointEditor'
+import { WireEditor } from './components/WireEditor'
 import {
   createBreadboardDefinitionRecord,
   listBreadboardDefinitions,
@@ -10,6 +11,13 @@ import {
   updateBreadboardDefinitionRecord,
 } from './lib/breadboardDefinitionApi'
 import { createEmptyBreadboardDefinition, type BreadboardDefinition } from './lib/breadboardDefinitionModel'
+import {
+  createBreadboardProjectRecord,
+  listBreadboardProjects,
+  loadBreadboardProject,
+  updateBreadboardProjectRecord,
+} from './lib/breadboardProjectApi'
+import { createEmptyBreadboardProject, type BreadboardProject } from './lib/breadboardProjectModel'
 import { createDefaultAlignment, type SavedWorkspace } from './lib/imageAlignment'
 import { ensureLandscapeFile, rotateImageFile } from './lib/imageOrientation'
 import { loadSavedWorkspace, saveWorkspace, uploadWorkspaceImage } from './lib/imageWorkspaceApi'
@@ -19,7 +27,7 @@ const GUIDE_LINE_MAX = 100
 const DEFAULT_GUIDE_LINE_STEP = 0.5
 const DEFAULT_ROTATION_STEP = 0.25
 
-type WizardStep = 'home' | 'align' | 'points'
+type WizardStep = 'home' | 'align' | 'points' | 'select-breadboard' | 'wire'
 
 type ImageDimensions = {
   width: number
@@ -43,6 +51,15 @@ function mergeDefinitionLibrary(
   return [nextDefinition, ...remainingDefinitions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }
 
+function mergeProjectLibrary(
+  projects: BreadboardProject[],
+  nextProject: BreadboardProject,
+) {
+  const remainingProjects = projects.filter((project) => project.id !== nextProject.id)
+
+  return [nextProject, ...remainingProjects].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+}
+
 function createDefinitionDraft(
   workspace: SavedWorkspace,
   imageDimensions: ImageDimensions,
@@ -57,6 +74,14 @@ function createDefinitionDraft(
   })
 }
 
+function homeStatus(definitionCount: number, projectCount: number) {
+  if (definitionCount === 0 && projectCount === 0) {
+    return 'No breadboards or projects yet. Add a breadboard to get started.'
+  }
+
+  return `${definitionCount} saved breadboard${definitionCount === 1 ? '' : 's'} and ${projectCount} project${projectCount === 1 ? '' : 's'}.`
+}
+
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const normalizedImagePathsRef = useRef<Set<string>>(new Set())
@@ -64,6 +89,10 @@ function App() {
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null)
   const [definitions, setDefinitions] = useState<BreadboardDefinition[]>([])
   const [currentDefinition, setCurrentDefinition] = useState<BreadboardDefinition | null>(null)
+  const [projects, setProjects] = useState<BreadboardProject[]>([])
+  const [currentProject, setCurrentProject] = useState<BreadboardProject | null>(null)
+  const [currentProjectBreadboard, setCurrentProjectBreadboard] = useState<BreadboardDefinition | null>(null)
+  const [isProjectBusy, setIsProjectBusy] = useState(false)
   const [draftAlignment, setDraftAlignment] = useState(createDefaultAlignment())
   const [workspaceImageDimensions, setWorkspaceImageDimensions] = useState<ImageDimensions | null>(null)
   const [guideLinePercent, setGuideLinePercent] = useState(25)
@@ -79,18 +108,18 @@ function App() {
 
     void (async () => {
       try {
-        const savedDefinitions = await listBreadboardDefinitions()
+        const [savedDefinitions, savedProjects] = await Promise.all([
+          listBreadboardDefinitions(),
+          listBreadboardProjects().catch(() => [] as BreadboardProject[]),
+        ])
 
         if (!isActive) {
           return
         }
 
         setDefinitions(savedDefinitions)
-        setStatus(
-          savedDefinitions.length === 0
-            ? 'No breadboards saved yet. Add one to get started.'
-            : `${savedDefinitions.length} saved breadboard${savedDefinitions.length === 1 ? '' : 's'}.`,
-        )
+        setProjects(savedProjects)
+        setStatus(homeStatus(savedDefinitions.length, savedProjects.length))
       } catch {
         if (isActive) {
           setStatus('Could not load the saved breadboard library.')
@@ -221,11 +250,85 @@ function App() {
 
   function handleBackToHome() {
     setStep('home')
-    setStatus(
-      definitions.length === 0
-        ? 'No breadboards saved yet. Add one to get started.'
-        : `${definitions.length} saved breadboard${definitions.length === 1 ? '' : 's'}.`,
-    )
+    setCurrentProject(null)
+    setCurrentProjectBreadboard(null)
+    setStatus(homeStatus(definitions.length, projects.length))
+  }
+
+  function handleStartProject() {
+    if (definitions.length === 0) {
+      setStatus('Add a breadboard first - projects need a saved breadboard to wire.')
+      return
+    }
+
+    setStep('select-breadboard')
+    setStatus('Pick a breadboard for your new project.')
+  }
+
+  async function handleSelectBreadboardForProject(definitionId: string) {
+    setIsProjectBusy(true)
+
+    try {
+      const breadboard = await loadBreadboardDefinition(definitionId)
+      const newProject = createEmptyBreadboardProject({
+        name: `${breadboard.name} project`,
+        breadboardDefinitionId: breadboard.id,
+      })
+
+      setCurrentProject(newProject)
+      setCurrentProjectBreadboard(breadboard)
+      setStep('wire')
+      setStatus(`New project on ${breadboard.name}. Click two pin holes to add a wire.`)
+    } catch {
+      setStatus('Could not load that breadboard for wiring.')
+    } finally {
+      setIsProjectBusy(false)
+    }
+  }
+
+  async function handleOpenProject(projectId: string) {
+    setIsProjectBusy(true)
+
+    try {
+      const project = await loadBreadboardProject(projectId)
+      const breadboard = await loadBreadboardDefinition(project.breadboardDefinitionId)
+
+      setCurrentProject(project)
+      setCurrentProjectBreadboard(breadboard)
+      setStep('wire')
+      setStatus(
+        project.wires.length === 0
+          ? `Editing ${project.name}. Click two pin holes to add a wire.`
+          : `Editing ${project.name}. ${project.wires.length} wire${project.wires.length === 1 ? '' : 's'} placed.`,
+      )
+    } catch {
+      setStatus('Could not load that project.')
+    } finally {
+      setIsProjectBusy(false)
+    }
+  }
+
+  async function handleProjectChange(nextProject: BreadboardProject) {
+    setCurrentProject(nextProject)
+
+    setIsProjectBusy(true)
+
+    try {
+      const isExisting = projects.some((project) => project.id === nextProject.id)
+      const savedProject = isExisting
+        ? await updateBreadboardProjectRecord(nextProject)
+        : await createBreadboardProjectRecord(nextProject)
+
+      setProjects((existingProjects) => mergeProjectLibrary(existingProjects, savedProject))
+      setCurrentProject(savedProject)
+      setStatus(
+        `Saved ${savedProject.name}. ${savedProject.wires.length} wire${savedProject.wires.length === 1 ? '' : 's'} placed.`,
+      )
+    } catch {
+      setStatus('Could not save the project.')
+    } finally {
+      setIsProjectBusy(false)
+    }
   }
 
   async function handleOpenDefinition(definitionId: string) {
@@ -451,6 +554,15 @@ function App() {
             >
               Add breadboard
             </button>
+            <button
+              type="button"
+              className="action-button action-button--ghost"
+              onClick={handleStartProject}
+              disabled={isProjectBusy || definitions.length === 0}
+              title={definitions.length === 0 ? 'Add a breadboard first' : undefined}
+            >
+              Start project
+            </button>
           </div>
           {definitions.length === 0 ? (
             <div className="home-screen__empty">
@@ -461,7 +573,7 @@ function App() {
               </p>
             </div>
           ) : (
-            <ul className="home-screen__list">
+            <ul className="home-screen__list" aria-label="Saved breadboard list">
               {definitions.map((definition) => (
                 <li key={definition.id} className="home-screen__card">
                   <div className="home-screen__card-body">
@@ -484,6 +596,84 @@ function App() {
               ))}
             </ul>
           )}
+          <section className="home-screen__section" aria-label="Saved projects">
+            <h2 className="home-screen__section-title">Projects</h2>
+            {projects.length === 0 ? (
+              <p className="home-screen__section-empty">
+                No projects yet. Click <strong>Start project</strong> to pick a breadboard and add wires.
+              </p>
+            ) : (
+              <ul className="home-screen__list" aria-label="Saved project list">
+                {projects.map((project) => {
+                  const breadboardName =
+                    definitions.find((definition) => definition.id === project.breadboardDefinitionId)?.name ?? 'Unknown breadboard'
+
+                  return (
+                    <li key={project.id} className="home-screen__card">
+                      <div className="home-screen__card-body">
+                        <h3 className="home-screen__card-title">{project.name}</h3>
+                        <p className="home-screen__card-meta">
+                          {project.wires.length} wire{project.wires.length === 1 ? '' : 's'}
+                          {' \u00b7 '}
+                          {breadboardName}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="action-button action-button--ghost"
+                        onClick={() => void handleOpenProject(project.id)}
+                        disabled={isProjectBusy}
+                      >
+                        Open project
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </section>
+        </section>
+      ) : null}
+      {step === 'select-breadboard' ? (
+        <section className="home-screen" aria-label="Select a breadboard">
+          <header className="home-screen__header">
+            <p className="image-workspace__eyebrow">Project mode - step 1 of 2</p>
+            <h1 className="home-screen__title">Pick a breadboard</h1>
+            <p className="image-workspace__status">{status}</p>
+          </header>
+          <div className="home-screen__actions">
+            <button
+              type="button"
+              className="action-button action-button--ghost"
+              onClick={handleBackToHome}
+              disabled={isProjectBusy}
+            >
+              Cancel
+            </button>
+          </div>
+          <ul className="home-screen__list" aria-label="Breadboards available for wiring">
+            {definitions.map((definition) => (
+              <li key={definition.id} className="home-screen__card">
+                <div className="home-screen__card-body">
+                  <h3 className="home-screen__card-title">{definition.name}</h3>
+                  <p className="home-screen__card-meta">
+                    {definition.points.length} pin hole{definition.points.length === 1 ? '' : 's'}
+                    {' \u00b7 '}
+                    {definition.imageName}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="action-button"
+                  onClick={() => void handleSelectBreadboardForProject(definition.id)}
+                  disabled={isProjectBusy || definition.points.length < 2}
+                  title={definition.points.length < 2 ? 'Add at least two pin holes to wire this breadboard' : undefined}
+                >
+                  Use this breadboard
+                </button>
+              </li>
+            ))}
+          </ul>
         </section>
       ) : null}
       {step === 'align' ? (
@@ -538,6 +728,28 @@ function App() {
             onClick={handleBackToHome}
           >
             Back to home
+          </button>
+        </section>
+      ) : null}
+      {step === 'wire' && currentProject && currentProjectBreadboard ? (
+        <WireEditor
+          project={currentProject}
+          breadboard={currentProjectBreadboard}
+          isBusy={isProjectBusy}
+          status={status}
+          onBack={handleBackToHome}
+          onChange={(nextProject) => void handleProjectChange(nextProject)}
+        />
+      ) : null}
+      {step === 'wire' && (!currentProject || !currentProjectBreadboard) ? (
+        <section className="pin-editor" aria-label="Loading project">
+          <p className="image-workspace__status">Loading project...</p>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={handleBackToHome}
+          >
+            Back to projects
           </button>
         </section>
       ) : null}

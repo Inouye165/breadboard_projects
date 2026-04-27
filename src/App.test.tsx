@@ -4,6 +4,8 @@ import { vi } from 'vitest'
 import App from './App'
 import type { BreadboardDefinition } from './lib/breadboardDefinitionModel'
 import * as breadboardDefinitionApi from './lib/breadboardDefinitionApi'
+import * as breadboardProjectApi from './lib/breadboardProjectApi'
+import type { BreadboardProject } from './lib/breadboardProjectModel'
 import type { SavedWorkspace } from './lib/imageAlignment'
 import * as imageOrientation from './lib/imageOrientation'
 import * as imageWorkspaceApi from './lib/imageWorkspaceApi'
@@ -105,6 +107,14 @@ vi.mock('./lib/breadboardDefinitionApi', () => ({
   updateBreadboardDefinitionRecord: vi.fn(),
 }))
 
+vi.mock('./lib/breadboardProjectApi', () => ({
+  createBreadboardProjectRecord: vi.fn(),
+  listBreadboardProjects: vi.fn(),
+  loadBreadboardProject: vi.fn(),
+  updateBreadboardProjectRecord: vi.fn(),
+  deleteBreadboardProjectRecord: vi.fn(),
+}))
+
 vi.mock('./lib/imageWorkspaceApi', () => ({
   loadSavedWorkspace: vi.fn(),
   saveWorkspace: vi.fn(),
@@ -118,6 +128,7 @@ vi.mock('./lib/imageOrientation', () => ({
 
 const mockedApi = vi.mocked(imageWorkspaceApi)
 const mockedDefinitionApi = vi.mocked(breadboardDefinitionApi)
+const mockedProjectApi = vi.mocked(breadboardProjectApi)
 const mockedOrientation = vi.mocked(imageOrientation)
 
 const uploadedWorkspace: SavedWorkspace = {
@@ -141,6 +152,26 @@ const savedDefinition: BreadboardDefinition = {
   updatedAt: '2026-04-24T00:00:00.000Z',
 }
 
+const wireableDefinition: BreadboardDefinition = {
+  ...savedDefinition,
+  points: [
+    { id: 'p1', label: 'A1', x: 100, y: 100, kind: 'breadboard-hole' },
+    { id: 'p2', label: 'A2', x: 300, y: 100, kind: 'breadboard-hole' },
+    { id: 'p3', label: 'A3', x: 500, y: 200, kind: 'breadboard-hole' },
+  ],
+}
+
+const savedProject: BreadboardProject = {
+  id: 'project-1',
+  name: 'Saved project',
+  breadboardDefinitionId: 'definition-1',
+  wires: [
+    { id: 'wire-1', fromPointId: 'p1', toPointId: 'p2', color: '#cc3333' },
+  ],
+  createdAt: '2026-04-24T00:00:00.000Z',
+  updatedAt: '2026-04-24T00:00:00.000Z',
+}
+
 beforeEach(() => {
   mockedDefinitionApi.createBreadboardDefinitionRecord.mockImplementation(async (definition) => ({
     ...definition,
@@ -149,6 +180,14 @@ beforeEach(() => {
   mockedDefinitionApi.listBreadboardDefinitions.mockResolvedValue([])
   mockedDefinitionApi.loadBreadboardDefinition.mockResolvedValue(savedDefinition)
   mockedDefinitionApi.updateBreadboardDefinitionRecord.mockImplementation(async (definition) => definition)
+  mockedProjectApi.listBreadboardProjects.mockResolvedValue([])
+  mockedProjectApi.loadBreadboardProject.mockResolvedValue(savedProject)
+  mockedProjectApi.createBreadboardProjectRecord.mockImplementation(async (project) => ({
+    ...project,
+    id: project.id || 'created-project-1',
+  }))
+  mockedProjectApi.updateBreadboardProjectRecord.mockImplementation(async (project) => project)
+  mockedProjectApi.deleteBreadboardProjectRecord.mockResolvedValue(undefined)
   mockedApi.loadSavedWorkspace.mockResolvedValue(null)
   mockedApi.saveWorkspace.mockImplementation(async (workspace) => workspace)
   mockedApi.uploadWorkspaceImage.mockResolvedValue(uploadedWorkspace)
@@ -314,5 +353,48 @@ describe('App wizard flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
 
     expect(await screen.findByRole('heading', { name: /your breadboards/i })).toBeTruthy()
+  })
+
+  it('starts a project, picks a breadboard, and saves a wire between two pins', async () => {
+    mockedDefinitionApi.listBreadboardDefinitions.mockResolvedValue([wireableDefinition])
+    mockedDefinitionApi.loadBreadboardDefinition.mockResolvedValue(wireableDefinition)
+
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /start project/i }))
+
+    fireEvent.click(await screen.findByRole('button', { name: /use this breadboard/i }))
+
+    await screen.findByRole('button', { name: /Pin hole A1/ })
+    fireEvent.click(screen.getByRole('button', { name: /Pin hole A1/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Pin hole A2/ }))
+
+    await waitFor(() => {
+      expect(mockedProjectApi.createBreadboardProjectRecord).toHaveBeenCalled()
+    })
+
+    const createdProject = mockedProjectApi.createBreadboardProjectRecord.mock.calls[0][0]
+    expect(createdProject.breadboardDefinitionId).toBe('definition-1')
+    expect(createdProject.wires).toHaveLength(1)
+    expect(createdProject.wires[0].fromPointId).toBe('p1')
+    expect(createdProject.wires[0].toPointId).toBe('p2')
+  })
+
+  it('lists saved projects on the home screen and lets the user open one for wiring', async () => {
+    mockedDefinitionApi.listBreadboardDefinitions.mockResolvedValue([wireableDefinition])
+    mockedDefinitionApi.loadBreadboardDefinition.mockResolvedValue(wireableDefinition)
+    mockedProjectApi.listBreadboardProjects.mockResolvedValue([savedProject])
+
+    render(<App />)
+
+    expect(await screen.findByText('Saved project')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /open project/i }))
+
+    await waitFor(() => {
+      expect(mockedProjectApi.loadBreadboardProject).toHaveBeenCalledWith('project-1')
+    })
+
+    expect(await screen.findByLabelText(/Wire from A1 to A2/)).toBeTruthy()
   })
 })
