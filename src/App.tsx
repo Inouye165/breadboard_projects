@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import './App.css'
 import { ImageWorkspace } from './components/ImageWorkspace'
+import { PinPointEditor } from './components/PinPointEditor'
 import {
   createBreadboardDefinitionRecord,
   listBreadboardDefinitions,
@@ -18,17 +19,19 @@ const GUIDE_LINE_MAX = 100
 const DEFAULT_GUIDE_LINE_STEP = 0.5
 const DEFAULT_ROTATION_STEP = 0.25
 
+type WizardStep = 'home' | 'align' | 'points'
+
+type ImageDimensions = {
+  width: number
+  height: number
+}
+
 function alignmentsMatch(left: SavedWorkspace['alignment'], right: SavedWorkspace['alignment']) {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
 function clampGuideLinePercent(value: number) {
   return Math.min(GUIDE_LINE_MAX, Math.max(GUIDE_LINE_MIN, value))
-}
-
-type ImageDimensions = {
-  width: number
-  height: number
 }
 
 function mergeDefinitionLibrary(
@@ -57,6 +60,7 @@ function createDefinitionDraft(
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const normalizedImagePathsRef = useRef<Set<string>>(new Set())
+  const [step, setStep] = useState<WizardStep>('home')
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null)
   const [definitions, setDefinitions] = useState<BreadboardDefinition[]>([])
   const [currentDefinition, setCurrentDefinition] = useState<BreadboardDefinition | null>(null)
@@ -65,56 +69,11 @@ function App() {
   const [guideLinePercent, setGuideLinePercent] = useState(25)
   const [rotationStep, setRotationStep] = useState(DEFAULT_ROTATION_STEP)
   const [guideLineStep, setGuideLineStep] = useState(DEFAULT_GUIDE_LINE_STEP)
-  const [isBusy, setIsBusy] = useState(true)
+  const [isBusy, setIsBusy] = useState(false)
   const [isDefinitionBusy, setIsDefinitionBusy] = useState(false)
-  const [status, setStatus] = useState('Loading saved image workspace...')
+  const [status, setStatus] = useState('Loading saved breadboards...')
 
-  useEffect(() => {
-    let isActive = true
-
-    async function restoreWorkspace() {
-      try {
-        const savedWorkspace = await loadSavedWorkspace()
-
-        if (!isActive) {
-          return
-        }
-
-        if (!savedWorkspace) {
-          setWorkspace(null)
-          setWorkspaceImageDimensions(null)
-          setCurrentDefinition(null)
-          setDraftAlignment(createDefaultAlignment())
-          setStatus('Upload a breadboard image to start the alignment workflow.')
-          return
-        }
-
-        setWorkspaceImageDimensions(null)
-        setWorkspace(savedWorkspace)
-        setDraftAlignment(savedWorkspace.alignment)
-        setStatus(
-          savedWorkspace.alignment.rotationDegrees === 0
-            ? 'Saved image loaded. Click the stage, drag the guide, or use arrow keys to align it in real time.'
-            : 'Saved image loaded with a preview rotation. Fine tune it live, then save to bake it into the image.',
-        )
-      } catch {
-        if (isActive) {
-          setStatus('Could not load the saved image workspace.')
-        }
-      } finally {
-        if (isActive) {
-          setIsBusy(false)
-        }
-      }
-    }
-
-    void restoreWorkspace()
-
-    return () => {
-      isActive = false
-    }
-  }, [])
-
+  // Load saved definitions on mount.
   useEffect(() => {
     let isActive = true
 
@@ -122,12 +81,19 @@ function App() {
       try {
         const savedDefinitions = await listBreadboardDefinitions()
 
-        if (isActive) {
-          setDefinitions(savedDefinitions)
+        if (!isActive) {
+          return
         }
+
+        setDefinitions(savedDefinitions)
+        setStatus(
+          savedDefinitions.length === 0
+            ? 'No breadboards saved yet. Add one to get started.'
+            : `${savedDefinitions.length} saved breadboard${savedDefinitions.length === 1 ? '' : 's'}.`,
+        )
       } catch {
         if (isActive) {
-          setStatus('Saved image loaded. Could not load the saved definition library yet.')
+          setStatus('Could not load the saved breadboard library.')
         }
       }
     })()
@@ -137,10 +103,25 @@ function App() {
     }
   }, [])
 
-  const hasUnsavedAlignment = workspace ? !alignmentsMatch(workspace.alignment, draftAlignment) : false
-  const isDefinitionSaveDisabled = !currentDefinition || !workspace || !workspaceImageDimensions
-
+  // Touch the workspace endpoint on boot to keep parity with prior behavior.
   useEffect(() => {
+    void (async () => {
+      try {
+        await loadSavedWorkspace()
+      } catch {
+        // Ignore.
+      }
+    })()
+  }, [])
+
+  const hasUnsavedAlignment = workspace ? !alignmentsMatch(workspace.alignment, draftAlignment) : false
+
+  // Auto-normalize portrait images to landscape when entering align step.
+  useEffect(() => {
+    if (step !== 'align') {
+      return
+    }
+
     const imagePath = workspace?.imagePath
 
     if (!imagePath || normalizedImagePathsRef.current.has(imagePath)) {
@@ -189,124 +170,89 @@ function App() {
         setWorkspaceImageDimensions(null)
         setWorkspace(restored)
         setDraftAlignment(restored.alignment)
-        setStatus('Saved image was rotated so the long side runs horizontally.')
+        setStatus('Image was rotated so the long side runs horizontally.')
       } catch {
-        // Leave the original image in place; UI still works.
+        // Leave the original image in place.
       }
     })()
 
     return () => {
       cancelled = true
     }
-  }, [workspace])
+  }, [step, workspace])
 
-  function handleUploadRequest() {
-    fileInputRef.current?.click()
-  }
+  const handleImageDimensionsChange = useCallback(
+    (nextDimensions: ImageDimensions) => {
+      setWorkspaceImageDimensions(nextDimensions)
 
-  const handleImageDimensionsChange = useCallback((nextDimensions: ImageDimensions) => {
-    setWorkspaceImageDimensions(nextDimensions)
-
-    if (!workspace) {
-      return
-    }
-
-    setCurrentDefinition((existingDefinition) => {
-      if (!existingDefinition) {
-        return createDefinitionDraft(workspace, nextDimensions)
+      if (!workspace) {
+        return
       }
 
-      if (
-        existingDefinition.imagePath === workspace.imagePath &&
-        existingDefinition.imageWidth === nextDimensions.width &&
-        existingDefinition.imageHeight === nextDimensions.height &&
-        existingDefinition.imageName === workspace.imageName
-      ) {
-        return existingDefinition
-      }
+      setCurrentDefinition((existingDefinition) => {
+        if (!existingDefinition) {
+          return createDefinitionDraft(workspace, nextDimensions)
+        }
 
-      return {
-        ...existingDefinition,
-        imageName: workspace.imageName,
-        imagePath: workspace.imagePath,
-        imageWidth: nextDimensions.width,
-        imageHeight: nextDimensions.height,
-      }
-    })
-  }, [workspace])
-
-  function handleDefinitionNameChange(name: string) {
-    setCurrentDefinition((existingDefinition) => {
-      if (!existingDefinition) {
-        if (!workspace || !workspaceImageDimensions) {
+        if (
+          existingDefinition.imagePath === workspace.imagePath &&
+          existingDefinition.imageWidth === nextDimensions.width &&
+          existingDefinition.imageHeight === nextDimensions.height &&
+          existingDefinition.imageName === workspace.imageName
+        ) {
           return existingDefinition
         }
 
-        return createDefinitionDraft(workspace, workspaceImageDimensions, name)
-      }
+        return {
+          ...existingDefinition,
+          imageName: workspace.imageName,
+          imagePath: workspace.imagePath,
+          imageWidth: nextDimensions.width,
+          imageHeight: nextDimensions.height,
+        }
+      })
+    },
+    [workspace],
+  )
 
-      return {
-        ...existingDefinition,
-        name,
-      }
-    })
+  function handleAddBreadboard() {
+    fileInputRef.current?.click()
   }
 
-  async function handleDefinitionSelected(definitionId: string) {
-    if (!definitionId) {
-      return
-    }
+  function handleBackToHome() {
+    setStep('home')
+    setStatus(
+      definitions.length === 0
+        ? 'No breadboards saved yet. Add one to get started.'
+        : `${definitions.length} saved breadboard${definitions.length === 1 ? '' : 's'}.`,
+    )
+  }
 
+  async function handleOpenDefinition(definitionId: string) {
     setIsDefinitionBusy(true)
 
     try {
       const definition = await loadBreadboardDefinition(definitionId)
 
       setCurrentDefinition(definition)
-      setStatus(`Loaded saved definition ${definition.name}.`)
+      setWorkspace({
+        imageName: definition.imageName,
+        imagePath: definition.imagePath,
+        alignment: createDefaultAlignment(),
+      })
+      setDraftAlignment(createDefaultAlignment())
+      setWorkspaceImageDimensions({
+        width: definition.imageWidth,
+        height: definition.imageHeight,
+      })
+      setStep('points')
+      setStatus(
+        definition.points.length === 0
+          ? `Editing ${definition.name}. Click the image to add pin holes.`
+          : `Editing ${definition.name}. ${definition.points.length} pin holes saved.`,
+      )
     } catch {
-      setStatus('Could not load the selected breadboard definition.')
-    } finally {
-      setIsDefinitionBusy(false)
-    }
-  }
-
-  function handleCreateDefinition() {
-    if (!workspace || !workspaceImageDimensions) {
-      return
-    }
-
-    const nextDefinition = createDefinitionDraft(workspace, workspaceImageDimensions)
-
-    setCurrentDefinition(nextDefinition)
-    setStatus('Created a new unsaved breadboard definition for the current image.')
-  }
-
-  async function handleSaveDefinition() {
-    if (!currentDefinition || !workspace || !workspaceImageDimensions) {
-      return
-    }
-
-    setIsDefinitionBusy(true)
-
-    try {
-      const definitionToSave = {
-        ...currentDefinition,
-        imageName: workspace.imageName,
-        imagePath: workspace.imagePath,
-        imageWidth: workspaceImageDimensions.width,
-        imageHeight: workspaceImageDimensions.height,
-      }
-      const existingDefinition = definitions.find((definition) => definition.id === definitionToSave.id)
-      const savedDefinition = existingDefinition
-        ? await updateBreadboardDefinitionRecord(definitionToSave)
-        : await createBreadboardDefinitionRecord(definitionToSave)
-
-      setDefinitions((existingDefinitions) => mergeDefinitionLibrary(existingDefinitions, savedDefinition))
-      setCurrentDefinition(savedDefinition)
-      setStatus(`Saved definition ${savedDefinition.name}. Points remain editable in a later phase.`)
-    } catch {
-      setStatus('Could not save the breadboard definition.')
+      setStatus('Could not load that breadboard definition.')
     } finally {
       setIsDefinitionBusy(false)
     }
@@ -329,7 +275,11 @@ function App() {
       setWorkspaceImageDimensions(null)
       setWorkspace(nextWorkspace)
       setDraftAlignment(nextWorkspace.alignment)
-      setStatus('Image saved locally. Click the stage, drag the guide, or use arrow keys to align it in real time.')
+      setCurrentDefinition(null)
+      setStep('align')
+      setStatus(
+        'Step 1 of 2 - Align the image. Use arrow keys, the rotation buttons, or drag the guide line.',
+      )
     } catch {
       setStatus('Could not save the selected image into local repo storage.')
     } finally {
@@ -346,7 +296,7 @@ function App() {
       rotationDegrees: currentAlignment.rotationDegrees + delta,
       referencePoints: null,
     }))
-    setStatus('Rotation preview updated live. Save alignment to bake this rotation into the stored image.')
+    setStatus('Rotation preview updated. Save alignment when the image looks level.')
   }
 
   function handleRotateLeft(multiplier = 1) {
@@ -365,12 +315,12 @@ function App() {
     setGuideLinePercent((currentValue) =>
       clampGuideLinePercent(currentValue + direction * guideLineStep * multiplier),
     )
-    setStatus('Guide line moved. Keep aligning live, then save when the image matches the guide.')
+    setStatus('Guide line moved. Keep aligning, then save when the image matches the guide.')
   }
 
   function handleResetAlignment() {
     setDraftAlignment(createDefaultAlignment())
-    setStatus('Rotation preview reset to the saved image orientation.')
+    setStatus('Rotation preview reset.')
   }
 
   async function handleSaveAlignment() {
@@ -389,7 +339,7 @@ function App() {
 
         setWorkspace(savedWorkspace)
         setDraftAlignment(savedWorkspace.alignment)
-        setStatus('No preview rotation was pending, so the saved image is already current.')
+        setStatus('No preview rotation was pending. Image is already aligned.')
         return
       }
 
@@ -408,11 +358,70 @@ function App() {
       setWorkspaceImageDimensions(null)
       setWorkspace(uploadedWorkspace)
       setDraftAlignment(createDefaultAlignment())
-      setStatus('Rotation saved into the image. Future app loads use the newly rotated file directly.')
+      setStatus('Rotation baked into the image. Continue to add pin holes.')
     } catch {
-      setStatus('Could not save the rotated image into local repo storage.')
+      setStatus('Could not save the rotated image.')
     } finally {
       setIsBusy(false)
+    }
+  }
+
+  function handleContinueToPoints() {
+    if (!workspace || !workspaceImageDimensions) {
+      setStatus('Wait for the image to finish loading before continuing.')
+      return
+    }
+
+    setCurrentDefinition((existingDefinition) =>
+      existingDefinition
+        ? {
+            ...existingDefinition,
+            imageName: workspace.imageName,
+            imagePath: workspace.imagePath,
+            imageWidth: workspaceImageDimensions.width,
+            imageHeight: workspaceImageDimensions.height,
+          }
+        : createDefinitionDraft(workspace, workspaceImageDimensions),
+    )
+    setStep('points')
+    setStatus('Step 2 of 2 - Click the image to drop pin holes for each connection point.')
+  }
+
+  function handlePinDefinitionChange(nextDefinition: BreadboardDefinition) {
+    setCurrentDefinition(nextDefinition)
+  }
+
+  async function handleSaveBreadboard() {
+    if (!currentDefinition) {
+      return
+    }
+
+    setIsDefinitionBusy(true)
+
+    try {
+      const definitionToSave: BreadboardDefinition = {
+        ...currentDefinition,
+        name: currentDefinition.name.trim() || 'Untitled breadboard',
+      }
+      const existingDefinition = definitions.find((definition) => definition.id === definitionToSave.id)
+      const savedDefinition = existingDefinition
+        ? await updateBreadboardDefinitionRecord(definitionToSave)
+        : await createBreadboardDefinitionRecord(definitionToSave)
+
+      const nextDefinitions = mergeDefinitionLibrary(definitions, savedDefinition)
+      setDefinitions(nextDefinitions)
+      setCurrentDefinition(null)
+      setWorkspace(null)
+      setWorkspaceImageDimensions(null)
+      setDraftAlignment(createDefaultAlignment())
+      setStep('home')
+      setStatus(
+        `Saved ${savedDefinition.name} with ${savedDefinition.points.length} pin hole${savedDefinition.points.length === 1 ? '' : 's'}.`,
+      )
+    } catch {
+      setStatus('Could not save the breadboard definition.')
+    } finally {
+      setIsDefinitionBusy(false)
     }
   }
 
@@ -426,38 +435,112 @@ function App() {
         aria-label="Upload breadboard image"
         onChange={handleFileSelection}
       />
-      <ImageWorkspace
-        currentDefinitionName={currentDefinition?.name ?? ''}
-        definitionOptions={definitions.map((definition) => ({
-          id: definition.id,
-          name: definition.name,
-        }))}
-        imageName={workspace?.imageName}
-        imagePath={workspace?.imagePath}
-        rotationDegrees={draftAlignment.rotationDegrees}
-        guideLinePercent={guideLinePercent}
-        rotationStep={rotationStep}
-        guideLineStep={guideLineStep}
-        isBusy={isBusy}
-        isDefinitionBusy={isDefinitionBusy}
-        isDefinitionSaveDisabled={Boolean(isDefinitionSaveDisabled)}
-        isSaveDisabled={!hasUnsavedAlignment}
-        status={status}
-        onCreateDefinition={handleCreateDefinition}
-        onCurrentDefinitionNameChange={handleDefinitionNameChange}
-        onDefinitionSelected={handleDefinitionSelected}
-        onImageDimensionsChange={handleImageDimensionsChange}
-        onUploadRequest={handleUploadRequest}
-        onGuideLineChange={handleGuideLineChange}
-        onRotationStepChange={setRotationStep}
-        onGuideLineStepChange={setGuideLineStep}
-        onRotateLeft={handleRotateLeft}
-        onRotateRight={handleRotateRight}
-        onNudgeGuideLine={handleNudgeGuideLine}
-        onResetAlignment={handleResetAlignment}
-        onSaveDefinition={handleSaveDefinition}
-        onSaveAlignment={handleSaveAlignment}
-      />
+      {step === 'home' ? (
+        <section className="home-screen" aria-label="Saved breadboards">
+          <header className="home-screen__header">
+            <p className="image-workspace__eyebrow">Breadboard projects</p>
+            <h1 className="home-screen__title">Your breadboards</h1>
+            <p className="image-workspace__status">{status}</p>
+          </header>
+          <div className="home-screen__actions">
+            <button
+              type="button"
+              className="action-button"
+              onClick={handleAddBreadboard}
+              disabled={isBusy}
+            >
+              Add breadboard
+            </button>
+          </div>
+          {definitions.length === 0 ? (
+            <div className="home-screen__empty">
+              <h2>No breadboards yet.</h2>
+              <p>
+                Click <strong>Add breadboard</strong> to upload an image, align it, and mark each pin
+                hole. The breadboard becomes a single saved object you can wire up later.
+              </p>
+            </div>
+          ) : (
+            <ul className="home-screen__list">
+              {definitions.map((definition) => (
+                <li key={definition.id} className="home-screen__card">
+                  <div className="home-screen__card-body">
+                    <h3 className="home-screen__card-title">{definition.name}</h3>
+                    <p className="home-screen__card-meta">
+                      {definition.points.length} pin hole{definition.points.length === 1 ? '' : 's'}
+                      {' \u00b7 '}
+                      {definition.imageName}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="action-button action-button--ghost"
+                    onClick={() => void handleOpenDefinition(definition.id)}
+                    disabled={isDefinitionBusy}
+                  >
+                    Open
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
+      {step === 'align' ? (
+        <ImageWorkspace
+          imageName={workspace?.imageName}
+          imagePath={workspace?.imagePath}
+          rotationDegrees={draftAlignment.rotationDegrees}
+          guideLinePercent={guideLinePercent}
+          rotationStep={rotationStep}
+          guideLineStep={guideLineStep}
+          isBusy={isBusy}
+          isSaveDisabled={!hasUnsavedAlignment}
+          showDefinitionPanel={false}
+          canContinueToPoints={Boolean(workspace) && !hasUnsavedAlignment && !isBusy}
+          status={status}
+          onImageDimensionsChange={handleImageDimensionsChange}
+          onUploadRequest={handleAddBreadboard}
+          onGuideLineChange={handleGuideLineChange}
+          onRotationStepChange={setRotationStep}
+          onGuideLineStepChange={setGuideLineStep}
+          onRotateLeft={handleRotateLeft}
+          onRotateRight={handleRotateRight}
+          onNudgeGuideLine={handleNudgeGuideLine}
+          onResetAlignment={handleResetAlignment}
+          onSaveAlignment={handleSaveAlignment}
+          onBackToHome={handleBackToHome}
+          onContinueToPoints={handleContinueToPoints}
+        />
+      ) : null}
+      {step === 'points' && currentDefinition && workspace && workspaceImageDimensions ? (
+        <PinPointEditor
+          definition={currentDefinition}
+          imagePath={workspace.imagePath}
+          imageWidth={workspaceImageDimensions.width}
+          imageHeight={workspaceImageDimensions.height}
+          isBusy={isDefinitionBusy}
+          status={status}
+          onBack={() => {
+            setStep('align')
+            setStatus('Back to alignment. Save again to bake any new rotation into the image.')
+          }}
+          onChange={handlePinDefinitionChange}
+          onSaveAndFinish={handleSaveBreadboard}
+        />
+      ) : null}
+      {step === 'points' && (!currentDefinition || !workspace || !workspaceImageDimensions) ? (
+        <section className="pin-editor" aria-label="Loading breadboard">
+          <p className="image-workspace__status">Loading breadboard image...</p>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={handleBackToHome}
+          >
+            Back to home
+          </button>
+        </section>
+      ) : null}
     </main>
   )
 }
