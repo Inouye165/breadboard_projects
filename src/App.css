@@ -365,3 +365,168 @@
     flex: 1 1 calc(50% - 4px);
   }
 }
+
+/* Home screen */
+.home-screen {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.home-screen__header {
+  display: grid;
+  gap: 4px;
+}
+
+.home-screen__title {
+  margin: 0;
+  font-size: 1.4rem;
+  color: var(--accent-strong);
+}
+
+.home-screen__actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.home-screen__empty {
+  padding: 24px;
+  border-radius: 18px;
+  background: rgba(255, 252, 245, 0.92);
+  border: 1px dashed rgba(127, 92, 24, 0.28);
+}
+
+.home-screen__empty h2 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.home-screen__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.home-screen__card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(255, 251, 244, 0.96);
+  border: 1px solid rgba(176, 128, 38, 0.18);
+  box-shadow: 0 6px 14px rgba(169, 101, 9, 0.08);
+}
+
+.home-screen__card-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.home-screen__card-title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--accent-strong);
+}
+
+.home-screen__card-meta {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Pin point editor */
+.pin-editor {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pin-editor__header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(244, 239, 228, 0.96);
+  border-bottom: 1px solid rgba(114, 88, 39, 0.18);
+  backdrop-filter: blur(8px);
+}
+
+.pin-editor__title-block {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.pin-editor__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.pin-editor__count {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+
+.pin-editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pin-editor__hint {
+  margin: 0 12px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(255, 251, 244, 0.92);
+  border: 1px dashed rgba(176, 128, 38, 0.24);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.pin-editor__svg {
+  cursor: crosshair;
+}
+
+.pin-editor__pin {
+  fill: rgba(201, 87, 28, 0.7);
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 2;
+  cursor: pointer;
+  transition: fill 120ms ease;
+}
+
+.pin-editor__pin:hover {
+  fill: rgba(201, 87, 28, 0.95);
+}
+
+.pin-editor__pin--pending {
+  fill: rgba(214, 32, 32, 0.92);
+  stroke: rgba(255, 255, 255, 0.95);
+}
+
+.pin-editor__pin-label {
+  fill: rgba(33, 24, 6, 0.85);
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(255, 252, 245, 0.95);
+  stroke-width: 3px;
+}

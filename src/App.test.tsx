@@ -13,46 +13,34 @@ vi.mock('./components/ImageWorkspace', async () => {
 
   return {
     ImageWorkspace: function MockImageWorkspace(props: {
-      currentDefinitionName: string
-      definitionOptions: Array<{ id: string; name: string }>
       imageName?: string
       imagePath?: string
       rotationDegrees: number
       status: string
-      onCreateDefinition: () => void
-      onCurrentDefinitionNameChange: (value: string) => void
-      onDefinitionSelected: (definitionId: string) => void
-      onGuideLineChange: (value: number) => void
-      onGuideLineStepChange: (value: number) => void
+      canContinueToPoints?: boolean
       onImageDimensionsChange?: (dimensions: { width: number; height: number }) => void
-      onNudgeGuideLine: (direction: -1 | 1, multiplier?: number) => void
+      onUploadRequest: () => void
       onRotateLeft: (multiplier?: number) => void
       onRotateRight: (multiplier?: number) => void
       onRotationStepChange: (value: number) => void
       onSaveAlignment: () => void
-      onSaveDefinition: () => void
-      onUploadRequest: () => void
+      onBackToHome?: () => void
+      onContinueToPoints?: () => void
     }) {
       const {
-        currentDefinitionName,
-        definitionOptions,
         imageName,
         imagePath,
-        onCreateDefinition,
-        onCurrentDefinitionNameChange,
-        onDefinitionSelected,
-        onGuideLineChange,
-        onGuideLineStepChange,
+        rotationDegrees,
+        status,
+        canContinueToPoints,
         onImageDimensionsChange,
-        onNudgeGuideLine,
+        onUploadRequest,
         onRotateLeft,
         onRotateRight,
         onRotationStepChange,
         onSaveAlignment,
-        onSaveDefinition,
-        onUploadRequest,
-        rotationDegrees,
-        status,
+        onBackToHome,
+        onContinueToPoints,
       } = props
 
       React.useEffect(() => {
@@ -61,58 +49,17 @@ vi.mock('./components/ImageWorkspace', async () => {
         }
       }, [imagePath, onImageDimensionsChange])
 
-      if (!imagePath) {
-        return (
-          <section aria-label="Image alignment workspace">
-            <h2>Upload a breadboard image to begin.</h2>
-            <button type="button" onClick={onUploadRequest}>
-              Upload image
-            </button>
-          </section>
-        )
-      }
-
       return (
         <section aria-label="Image alignment workspace">
           <p>{status}</p>
+          {onBackToHome ? (
+            <button type="button" onClick={onBackToHome}>
+              Back
+            </button>
+          ) : null}
           <button type="button" onClick={onUploadRequest}>
             Replace image
           </button>
-          <label htmlFor="current-definition-name">Current definition name</label>
-          <input
-            id="current-definition-name"
-            value={currentDefinitionName}
-            onChange={(event) => onCurrentDefinitionNameChange(event.target.value)}
-          />
-          <label htmlFor="definition-list">Load definition list</label>
-          <select id="definition-list" onChange={(event) => onDefinitionSelected(event.target.value)}>
-            <option value="">Select a saved definition</option>
-            {definitionOptions.map((definition) => (
-              <option key={definition.id} value={definition.id}>
-                {definition.name}
-              </option>
-            ))}
-          </select>
-          <button type="button" onClick={onCreateDefinition}>
-            New definition
-          </button>
-          <button type="button" onClick={onSaveDefinition}>
-            Save definition
-          </button>
-          <label htmlFor="guide-line-position">Position</label>
-          <input
-            id="guide-line-position"
-            type="range"
-            value={25}
-            onChange={(event) => onGuideLineChange(Number(event.target.value))}
-          />
-          <label htmlFor="guide-line-step">Nudge step</label>
-          <input
-            id="guide-line-step"
-            type="range"
-            value={0.5}
-            onChange={(event) => onGuideLineStepChange(Number(event.target.value))}
-          />
           <label htmlFor="rotation-step">Step size</label>
           <input
             id="rotation-step"
@@ -126,16 +73,25 @@ vi.mock('./components/ImageWorkspace', async () => {
           <button type="button" onClick={() => onRotateRight()}>
             Rotate right
           </button>
-          <button type="button" onClick={() => onNudgeGuideLine(-1, 1)}>
-            Nudge up
-          </button>
-          <button type="button" onClick={() => onNudgeGuideLine(1, 1)}>
-            Nudge down
-          </button>
           <button type="button" onClick={onSaveAlignment}>
             Save alignment
           </button>
-          <div role="img" aria-label={imageName ? `Breadboard image ${imageName}` : 'Breadboard image'} data-rotation-degrees={rotationDegrees.toString()} />
+          {onContinueToPoints ? (
+            <button
+              type="button"
+              onClick={onContinueToPoints}
+              disabled={!canContinueToPoints}
+            >
+              Continue to pin holes
+            </button>
+          ) : null}
+          {imagePath ? (
+            <div
+              role="img"
+              aria-label={imageName ? `Breadboard image ${imageName}` : 'Breadboard image'}
+              data-rotation-degrees={rotationDegrees.toString()}
+            />
+          ) : null}
         </section>
       )
     },
@@ -164,18 +120,18 @@ const mockedApi = vi.mocked(imageWorkspaceApi)
 const mockedDefinitionApi = vi.mocked(breadboardDefinitionApi)
 const mockedOrientation = vi.mocked(imageOrientation)
 
-const savedWorkspace: SavedWorkspace = {
+const uploadedWorkspace: SavedWorkspace = {
   imageName: 'board.png',
   imagePath: '/__breadboard_local__/images/board.png',
   alignment: {
-    rotationDegrees: 12,
+    rotationDegrees: 0,
     referencePoints: null,
   },
 }
 
 const savedDefinition: BreadboardDefinition = {
   id: 'definition-1',
-  name: 'Board definition',
+  name: 'Saved board',
   imageName: 'board.png',
   imagePath: '/__breadboard_local__/images/board.png',
   imageWidth: 1200,
@@ -186,13 +142,16 @@ const savedDefinition: BreadboardDefinition = {
 }
 
 beforeEach(() => {
-  mockedDefinitionApi.createBreadboardDefinitionRecord.mockImplementation(async (definition) => definition)
+  mockedDefinitionApi.createBreadboardDefinitionRecord.mockImplementation(async (definition) => ({
+    ...definition,
+    id: definition.id || 'created-1',
+  }))
   mockedDefinitionApi.listBreadboardDefinitions.mockResolvedValue([])
   mockedDefinitionApi.loadBreadboardDefinition.mockResolvedValue(savedDefinition)
   mockedDefinitionApi.updateBreadboardDefinitionRecord.mockImplementation(async (definition) => definition)
   mockedApi.loadSavedWorkspace.mockResolvedValue(null)
   mockedApi.saveWorkspace.mockImplementation(async (workspace) => workspace)
-  mockedApi.uploadWorkspaceImage.mockResolvedValue(savedWorkspace)
+  mockedApi.uploadWorkspaceImage.mockResolvedValue(uploadedWorkspace)
 
   class MockImage {
     naturalWidth = 1200
@@ -216,107 +175,127 @@ beforeEach(() => {
       blob: async () => new Blob(['image'], { type: 'image/png' }),
     } as Response),
   )
+
+  Element.prototype.getBoundingClientRect = vi.fn(() => ({
+    left: 0,
+    top: 0,
+    width: 1200,
+    height: 600,
+    right: 1200,
+    bottom: 600,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect))
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('App', () => {
-  it('shows the upload flow when no saved image exists', async () => {
+async function uploadAndReachAlignStep() {
+  const input = await screen.findByLabelText(/upload breadboard image/i)
+  const file = new File(['image'], 'fresh-board.png', { type: 'image/png' })
+
+  fireEvent.change(input, { target: { files: [file] } })
+
+  await screen.findByRole('button', { name: /save alignment/i })
+}
+
+describe('App wizard flow', () => {
+  it('shows the home screen with an Add breadboard button when no breadboards exist', async () => {
     render(<App />)
 
-    expect(await screen.findByRole('heading', { name: /upload a breadboard image to begin/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /upload image/i })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: /your breadboards/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /add breadboard/i })).toBeTruthy()
+    expect(screen.getByText(/no breadboards yet/i)).toBeTruthy()
   })
 
-  it('auto-loads the saved image workspace and shows manual rotation controls', async () => {
-    mockedApi.loadSavedWorkspace.mockResolvedValue(savedWorkspace)
+  it('lists saved breadboards on the home screen and lets the user open one', async () => {
+    mockedDefinitionApi.listBreadboardDefinitions.mockResolvedValue([savedDefinition])
 
     render(<App />)
 
-    expect(await screen.findByRole('img', { name: /breadboard image board.png/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /rotate left/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /rotate right/i })).toBeTruthy()
-    expect(screen.getByLabelText(/position/i)).toBeTruthy()
-    expect(screen.getByLabelText(/current definition name/i)).toBeTruthy()
-    expect(screen.getByLabelText(/nudge step/i)).toBeTruthy()
-    expect(screen.getByLabelText(/step size/i)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /connection point/i })).toBeNull()
-  })
+    expect(await screen.findByText('Saved board')).toBeTruthy()
 
-  it('saves a breadboard definition without requiring any overlay point interaction', async () => {
-    mockedApi.loadSavedWorkspace.mockResolvedValue(savedWorkspace)
-
-    render(<App />)
-
-    await screen.findByRole('img', { name: /breadboard image board.png/i })
+    fireEvent.click(screen.getByRole('button', { name: /open/i }))
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /save definition/i }).hasAttribute('disabled')).toBe(false)
+      expect(mockedDefinitionApi.loadBreadboardDefinition).toHaveBeenCalledWith('definition-1')
     })
 
-    fireEvent.change(screen.getByLabelText(/current definition name/i), {
-      target: { value: 'Saved board' },
+    // Goes straight to the pin point editor.
+    expect(await screen.findByLabelText(/breadboard pin hole canvas/i)).toBeTruthy()
+    expect(screen.getByLabelText(/breadboard name/i)).toBeTruthy()
+  })
+
+  it('walks through upload -> align -> add pin holes -> save', async () => {
+    render(<App />)
+
+    await screen.findByRole('button', { name: /add breadboard/i })
+
+    // Step 1: upload
+    await uploadAndReachAlignStep()
+
+    expect(mockedApi.uploadWorkspaceImage).toHaveBeenCalled()
+    expect(screen.getByRole('img', { name: /breadboard image board.png/i })).toBeTruthy()
+
+    // Save alignment with no rotation
+    fireEvent.click(screen.getByRole('button', { name: /save alignment/i }))
+
+    await waitFor(() => {
+      expect(mockedApi.saveWorkspace).toHaveBeenCalled()
     })
-    fireEvent.click(screen.getByRole('button', { name: /save definition/i }))
+
+    // Continue to pin holes
+    const continueButton = await screen.findByRole('button', { name: /continue to pin holes/i })
+    await waitFor(() => {
+      expect(continueButton.hasAttribute('disabled')).toBe(false)
+    })
+    fireEvent.click(continueButton)
+
+    // Step 2: pin holes editor
+    const canvas = await screen.findByLabelText(/breadboard pin hole canvas/i)
+    expect(canvas).toBeTruthy()
+    expect(
+      screen.getByText((_, element) => element?.textContent === '0 pin holes placed'),
+    ).toBeTruthy()
+
+    // Click the canvas to add a pin
+    fireEvent.pointerDown(canvas, { button: 0, clientX: 100, clientY: 50 })
+
+    await waitFor(() => {
+      expect(
+        screen.getByText((_, element) => element?.textContent === '1 pin hole placed'),
+      ).toBeTruthy()
+    })
+
+    // Save the breadboard
+    fireEvent.change(screen.getByLabelText(/breadboard name/i), { target: { value: 'My board' } })
+    fireEvent.click(screen.getByRole('button', { name: /save breadboard/i }))
 
     await waitFor(() => {
       expect(mockedDefinitionApi.createBreadboardDefinitionRecord).toHaveBeenCalled()
     })
 
-    expect(mockedDefinitionApi.createBreadboardDefinitionRecord.mock.calls[0][0]).toMatchObject({
-      name: 'Saved board',
+    const savedPayload = mockedDefinitionApi.createBreadboardDefinitionRecord.mock.calls[0][0]
+    expect(savedPayload).toMatchObject({
+      name: 'My board',
       imageName: 'board.png',
       imageWidth: 1200,
       imageHeight: 600,
-      points: [],
     })
-    expect(screen.queryByRole('button', { name: /connection point/i })).toBeNull()
+    expect(savedPayload.points).toHaveLength(1)
+    expect(savedPayload.points[0].kind).toBe('breadboard-hole')
+
+    // Returns to home screen
+    expect(await screen.findByRole('heading', { name: /your breadboards/i })).toBeTruthy()
   })
 
-  it('uploads a selected image through the local persistence API', async () => {
+  it('bakes a preview rotation into the image during alignment', async () => {
     render(<App />)
-
-    const input = await screen.findByLabelText(/upload breadboard image/i)
-    const file = new File(['image'], 'fresh-board.png', { type: 'image/png' })
-
-    fireEvent.change(input, { target: { files: [file] } })
-
-    await waitFor(() => {
-      expect(mockedApi.uploadWorkspaceImage).toHaveBeenCalled()
-    })
-
-    expect(mockedApi.uploadWorkspaceImage.mock.calls[0][0]).toBe(file)
-  })
-
-  it('applies a manual rotation amount to the preview', async () => {
-    mockedApi.loadSavedWorkspace.mockResolvedValue(savedWorkspace)
-
-    render(<App />)
-
-    const stage = await screen.findByRole('img', { name: /breadboard image board.png/i })
-
-    fireEvent.change(screen.getByLabelText(/step size/i), { target: { value: '0.5' } })
-    fireEvent.click(screen.getByRole('button', { name: /rotate right/i }))
-
-    expect(stage.getAttribute('data-rotation-degrees')).toBe('12.5')
-  })
-
-  it('bakes the preview rotation into a newly uploaded image and resets stored metadata', async () => {
-    mockedApi.loadSavedWorkspace.mockResolvedValue(savedWorkspace)
-    mockedApi.uploadWorkspaceImage.mockResolvedValue({
-      imageName: 'board.png',
-      imagePath: '/__breadboard_local__/images/rotated-board.png',
-      alignment: {
-        rotationDegrees: 0,
-        referencePoints: null,
-      },
-    })
-
-    render(<App />)
-
-    await screen.findByRole('img', { name: /breadboard image board.png/i })
+    await screen.findByRole('button', { name: /add breadboard/i })
+    await uploadAndReachAlignStep()
 
     fireEvent.change(screen.getByLabelText(/step size/i), { target: { value: '1.25' } })
     fireEvent.click(screen.getByRole('button', { name: /rotate right/i }))
@@ -324,10 +303,16 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(mockedOrientation.rotateImageFile).toHaveBeenCalled()
-      expect(mockedApi.uploadWorkspaceImage).toHaveBeenCalled()
     })
+  })
 
-    const uploadedCall = mockedApi.uploadWorkspaceImage.mock.calls.at(-1)
-    expect(uploadedCall?.[2]).toBeTruthy()
+  it('returns to the home screen from the alignment step', async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: /add breadboard/i })
+    await uploadAndReachAlignStep()
+
+    fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
+
+    expect(await screen.findByRole('heading', { name: /your breadboards/i })).toBeTruthy()
   })
 })

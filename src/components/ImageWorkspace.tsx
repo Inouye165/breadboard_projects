@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 
 type ImageWorkspaceProps = {
-  currentDefinitionName: string
-  definitionOptions: Array<{ id: string; name: string }>
+  currentDefinitionName?: string
+  definitionOptions?: Array<{ id: string; name: string }>
   imageName?: string
   imagePath?: string
   rotationDegrees: number
@@ -13,10 +13,12 @@ type ImageWorkspaceProps = {
   isDefinitionBusy?: boolean
   isDefinitionSaveDisabled?: boolean
   isSaveDisabled?: boolean
+  showDefinitionPanel?: boolean
+  canContinueToPoints?: boolean
   status: string
-  onCreateDefinition: () => void
-  onCurrentDefinitionNameChange: (value: string) => void
-  onDefinitionSelected: (definitionId: string) => void
+  onCreateDefinition?: () => void
+  onCurrentDefinitionNameChange?: (value: string) => void
+  onDefinitionSelected?: (definitionId: string) => void
   onImageDimensionsChange?: (dimensions: ImageDimensions) => void
   onUploadRequest: () => void
   onGuideLineChange: (value: number) => void
@@ -26,8 +28,10 @@ type ImageWorkspaceProps = {
   onRotateRight: (multiplier?: number) => void
   onNudgeGuideLine: (direction: -1 | 1, multiplier?: number) => void
   onResetAlignment: () => void
-  onSaveDefinition: () => void
+  onSaveDefinition?: () => void
   onSaveAlignment: () => void
+  onBackToHome?: () => void
+  onContinueToPoints?: () => void
 }
 
 type ImageDimensions = {
@@ -80,8 +84,8 @@ function getRotatedLayout(width: number, height: number, rotationDegrees: number
 }
 
 export function ImageWorkspace({
-  currentDefinitionName,
-  definitionOptions,
+  currentDefinitionName = '',
+  definitionOptions = [],
   imageName,
   imagePath,
   rotationDegrees,
@@ -92,6 +96,8 @@ export function ImageWorkspace({
   isDefinitionBusy = false,
   isDefinitionSaveDisabled = false,
   isSaveDisabled = false,
+  showDefinitionPanel = false,
+  canContinueToPoints = false,
   status,
   onCreateDefinition,
   onCurrentDefinitionNameChange,
@@ -107,6 +113,8 @@ export function ImageWorkspace({
   onResetAlignment,
   onSaveDefinition,
   onSaveAlignment,
+  onBackToHome,
+  onContinueToPoints,
 }: ImageWorkspaceProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [imageDimensions, setImageDimensions] = useState<ImageDimensions>()
@@ -201,11 +209,17 @@ export function ImageWorkspace({
           <p className="image-workspace__status">{status}</p>
         </div>
         <div className="image-workspace__actions">
+          {onBackToHome ? (
+            <button type="button" className="action-button action-button--ghost" onClick={onBackToHome}>
+              Back
+            </button>
+          ) : null}
           {imagePath ? (
             <button type="button" className="action-button action-button--ghost" onClick={onUploadRequest}>
               Replace image
             </button>
           ) : null}
+          {showDefinitionPanel ? (
           <section className="definition-panel" aria-label="Saved definition controls">
             <div className="alignment-panel__intro">
               <p className="control-guide__title">Saved definition</p>
@@ -264,6 +278,7 @@ export function ImageWorkspace({
               </button>
             </div>
           </section>
+          ) : null}
           <section className="alignment-panel" aria-label="Alignment controls">
             <div className="alignment-panel__intro">
               <p className="control-guide__title">Live controls</p>
@@ -358,6 +373,17 @@ export function ImageWorkspace({
               >
                 Save alignment
               </button>
+              {onContinueToPoints ? (
+                <button
+                  type="button"
+                  className="action-button"
+                  onClick={onContinueToPoints}
+                  disabled={!canContinueToPoints || isBusy}
+                  title={canContinueToPoints ? 'Continue to pin holes' : 'Save alignment first'}
+                >
+                  Continue to pin holes
+                </button>
+              ) : null}
             </div>
           </section>
         </div>
