@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import './App.css'
 import { ImageWorkspace } from './components/ImageWorkspace'
+import {
+  createBreadboardDefinitionRecord,
+  listBreadboardDefinitions,
+  loadBreadboardDefinition,
+  updateBreadboardDefinitionRecord,
+} from './lib/breadboardDefinitionApi'
+import { createEmptyBreadboardDefinition, type BreadboardDefinition } from './lib/breadboardDefinitionModel'
 import { createDefaultAlignment, type SavedWorkspace } from './lib/imageAlignment'
 import { ensureLandscapeFile, rotateImageFile } from './lib/imageOrientation'
 import { loadSavedWorkspace, saveWorkspace, uploadWorkspaceImage } from './lib/imageWorkspaceApi'
@@ -19,15 +26,47 @@ function clampGuideLinePercent(value: number) {
   return Math.min(GUIDE_LINE_MAX, Math.max(GUIDE_LINE_MIN, value))
 }
 
+type ImageDimensions = {
+  width: number
+  height: number
+}
+
+function mergeDefinitionLibrary(
+  definitions: BreadboardDefinition[],
+  nextDefinition: BreadboardDefinition,
+) {
+  const remainingDefinitions = definitions.filter((definition) => definition.id !== nextDefinition.id)
+
+  return [nextDefinition, ...remainingDefinitions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+}
+
+function createDefinitionDraft(
+  workspace: SavedWorkspace,
+  imageDimensions: ImageDimensions,
+  name = workspace.imageName.replace(/\.[^.]+$/, '') || 'Breadboard definition',
+) {
+  return createEmptyBreadboardDefinition({
+    name,
+    imageName: workspace.imageName,
+    imagePath: workspace.imagePath,
+    imageWidth: imageDimensions.width,
+    imageHeight: imageDimensions.height,
+  })
+}
+
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const normalizedImagePathsRef = useRef<Set<string>>(new Set())
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null)
+  const [definitions, setDefinitions] = useState<BreadboardDefinition[]>([])
+  const [currentDefinition, setCurrentDefinition] = useState<BreadboardDefinition | null>(null)
   const [draftAlignment, setDraftAlignment] = useState(createDefaultAlignment())
+  const [workspaceImageDimensions, setWorkspaceImageDimensions] = useState<ImageDimensions | null>(null)
   const [guideLinePercent, setGuideLinePercent] = useState(25)
   const [rotationStep, setRotationStep] = useState(DEFAULT_ROTATION_STEP)
   const [guideLineStep, setGuideLineStep] = useState(DEFAULT_GUIDE_LINE_STEP)
   const [isBusy, setIsBusy] = useState(true)
+  const [isDefinitionBusy, setIsDefinitionBusy] = useState(false)
   const [status, setStatus] = useState('Loading saved image workspace...')
 
   useEffect(() => {
@@ -43,11 +82,14 @@ function App() {
 
         if (!savedWorkspace) {
           setWorkspace(null)
+          setWorkspaceImageDimensions(null)
+          setCurrentDefinition(null)
           setDraftAlignment(createDefaultAlignment())
           setStatus('Upload a breadboard image to start the alignment workflow.')
           return
         }
 
+        setWorkspaceImageDimensions(null)
         setWorkspace(savedWorkspace)
         setDraftAlignment(savedWorkspace.alignment)
         setStatus(
@@ -73,7 +115,30 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    let isActive = true
+
+    void (async () => {
+      try {
+        const savedDefinitions = await listBreadboardDefinitions()
+
+        if (isActive) {
+          setDefinitions(savedDefinitions)
+        }
+      } catch {
+        if (isActive) {
+          setStatus('Saved image loaded. Could not load the saved definition library yet.')
+        }
+      }
+    })()
+
+    return () => {
+      isActive = false
+    }
+  }, [])
+
   const hasUnsavedAlignment = workspace ? !alignmentsMatch(workspace.alignment, draftAlignment) : false
+  const isDefinitionSaveDisabled = !currentDefinition || !workspace || !workspaceImageDimensions
 
   useEffect(() => {
     const imagePath = workspace?.imagePath
@@ -121,6 +186,7 @@ function App() {
           return
         }
 
+        setWorkspaceImageDimensions(null)
         setWorkspace(restored)
         setDraftAlignment(restored.alignment)
         setStatus('Saved image was rotated so the long side runs horizontally.')
@@ -138,6 +204,114 @@ function App() {
     fileInputRef.current?.click()
   }
 
+  const handleImageDimensionsChange = useCallback((nextDimensions: ImageDimensions) => {
+    setWorkspaceImageDimensions(nextDimensions)
+
+    if (!workspace) {
+      return
+    }
+
+    setCurrentDefinition((existingDefinition) => {
+      if (!existingDefinition) {
+        return createDefinitionDraft(workspace, nextDimensions)
+      }
+
+      if (
+        existingDefinition.imagePath === workspace.imagePath &&
+        existingDefinition.imageWidth === nextDimensions.width &&
+        existingDefinition.imageHeight === nextDimensions.height &&
+        existingDefinition.imageName === workspace.imageName
+      ) {
+        return existingDefinition
+      }
+
+      return {
+        ...existingDefinition,
+        imageName: workspace.imageName,
+        imagePath: workspace.imagePath,
+        imageWidth: nextDimensions.width,
+        imageHeight: nextDimensions.height,
+      }
+    })
+  }, [workspace])
+
+  function handleDefinitionNameChange(name: string) {
+    setCurrentDefinition((existingDefinition) => {
+      if (!existingDefinition) {
+        if (!workspace || !workspaceImageDimensions) {
+          return existingDefinition
+        }
+
+        return createDefinitionDraft(workspace, workspaceImageDimensions, name)
+      }
+
+      return {
+        ...existingDefinition,
+        name,
+      }
+    })
+  }
+
+  async function handleDefinitionSelected(definitionId: string) {
+    if (!definitionId) {
+      return
+    }
+
+    setIsDefinitionBusy(true)
+
+    try {
+      const definition = await loadBreadboardDefinition(definitionId)
+
+      setCurrentDefinition(definition)
+      setStatus(`Loaded saved definition ${definition.name}.`)
+    } catch {
+      setStatus('Could not load the selected breadboard definition.')
+    } finally {
+      setIsDefinitionBusy(false)
+    }
+  }
+
+  function handleCreateDefinition() {
+    if (!workspace || !workspaceImageDimensions) {
+      return
+    }
+
+    const nextDefinition = createDefinitionDraft(workspace, workspaceImageDimensions)
+
+    setCurrentDefinition(nextDefinition)
+    setStatus('Created a new unsaved breadboard definition for the current image.')
+  }
+
+  async function handleSaveDefinition() {
+    if (!currentDefinition || !workspace || !workspaceImageDimensions) {
+      return
+    }
+
+    setIsDefinitionBusy(true)
+
+    try {
+      const definitionToSave = {
+        ...currentDefinition,
+        imageName: workspace.imageName,
+        imagePath: workspace.imagePath,
+        imageWidth: workspaceImageDimensions.width,
+        imageHeight: workspaceImageDimensions.height,
+      }
+      const existingDefinition = definitions.find((definition) => definition.id === definitionToSave.id)
+      const savedDefinition = existingDefinition
+        ? await updateBreadboardDefinitionRecord(definitionToSave)
+        : await createBreadboardDefinitionRecord(definitionToSave)
+
+      setDefinitions((existingDefinitions) => mergeDefinitionLibrary(existingDefinitions, savedDefinition))
+      setCurrentDefinition(savedDefinition)
+      setStatus(`Saved definition ${savedDefinition.name}. Points remain editable in a later phase.`)
+    } catch {
+      setStatus('Could not save the breadboard definition.')
+    } finally {
+      setIsDefinitionBusy(false)
+    }
+  }
+
   async function handleFileSelection(event: React.ChangeEvent<HTMLInputElement>) {
     const [file] = Array.from(event.target.files ?? [])
     event.target.value = ''
@@ -152,6 +326,7 @@ function App() {
       const nextWorkspace = await uploadWorkspaceImage(file, fetch, ensureLandscapeFile)
 
       normalizedImagePathsRef.current.add(nextWorkspace.imagePath)
+      setWorkspaceImageDimensions(null)
       setWorkspace(nextWorkspace)
       setDraftAlignment(nextWorkspace.alignment)
       setStatus('Image saved locally. Click the stage, drag the guide, or use arrow keys to align it in real time.')
@@ -230,6 +405,7 @@ function App() {
       const uploadedWorkspace = await uploadWorkspaceImage(rotatedFile, fetch, async (file) => file)
 
       normalizedImagePathsRef.current.add(uploadedWorkspace.imagePath)
+      setWorkspaceImageDimensions(null)
       setWorkspace(uploadedWorkspace)
       setDraftAlignment(createDefaultAlignment())
       setStatus('Rotation saved into the image. Future app loads use the newly rotated file directly.')
@@ -251,6 +427,11 @@ function App() {
         onChange={handleFileSelection}
       />
       <ImageWorkspace
+        currentDefinitionName={currentDefinition?.name ?? ''}
+        definitionOptions={definitions.map((definition) => ({
+          id: definition.id,
+          name: definition.name,
+        }))}
         imageName={workspace?.imageName}
         imagePath={workspace?.imagePath}
         rotationDegrees={draftAlignment.rotationDegrees}
@@ -258,8 +439,14 @@ function App() {
         rotationStep={rotationStep}
         guideLineStep={guideLineStep}
         isBusy={isBusy}
+        isDefinitionBusy={isDefinitionBusy}
+        isDefinitionSaveDisabled={Boolean(isDefinitionSaveDisabled)}
         isSaveDisabled={!hasUnsavedAlignment}
         status={status}
+        onCreateDefinition={handleCreateDefinition}
+        onCurrentDefinitionNameChange={handleDefinitionNameChange}
+        onDefinitionSelected={handleDefinitionSelected}
+        onImageDimensionsChange={handleImageDimensionsChange}
         onUploadRequest={handleUploadRequest}
         onGuideLineChange={handleGuideLineChange}
         onRotationStepChange={setRotationStep}
@@ -268,6 +455,7 @@ function App() {
         onRotateRight={handleRotateRight}
         onNudgeGuideLine={handleNudgeGuideLine}
         onResetAlignment={handleResetAlignment}
+        onSaveDefinition={handleSaveDefinition}
         onSaveAlignment={handleSaveAlignment}
       />
     </main>

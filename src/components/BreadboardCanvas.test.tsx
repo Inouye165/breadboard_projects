@@ -2,8 +2,22 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { vi } from 'vitest'
 
 import { BreadboardCanvas } from './BreadboardCanvas'
+import { getHorizontalDisplayDimensions } from '../lib/displayImageOrientation'
 
 describe('BreadboardCanvas', () => {
+  it('normalizes portrait image dimensions to horizontal display dimensions', () => {
+    expect(getHorizontalDisplayDimensions(420, 1200)).toEqual({
+      width: 1200,
+      height: 420,
+      shouldRotate: true,
+    })
+    expect(getHorizontalDisplayDimensions(1200, 420)).toEqual({
+      width: 1200,
+      height: 420,
+      shouldRotate: false,
+    })
+  })
+
   it('prompts for a screenshot when no image is provided', () => {
     render(<BreadboardCanvas onImageSelected={vi.fn()} />)
 

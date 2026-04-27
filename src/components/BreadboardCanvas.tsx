@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { PartEditor } from './PartEditor'
 import { DEFAULT_BREADBOARD_IMAGE_HEIGHT, DEFAULT_BREADBOARD_IMAGE_WIDTH } from '../lib/breadboardPartDefinitions'
+import { getHorizontalDisplayDimensions } from '../lib/displayImageOrientation'
 
 function pixelHasVisibleContent(data: Uint8ClampedArray, offset: number) {
   const alpha = data[offset + 3]
@@ -17,6 +18,40 @@ function pixelHasVisibleContent(data: Uint8ClampedArray, offset: number) {
   const chroma = Math.max(red, green, blue) - Math.min(red, green, blue)
 
   return brightness < 248 || chroma > 10
+}
+
+function rotateCanvasToHorizontal(sourceCanvas: HTMLCanvasElement) {
+  const rotatedCanvas = document.createElement('canvas')
+  const nextDimensions = getHorizontalDisplayDimensions(sourceCanvas.width, sourceCanvas.height)
+
+  rotatedCanvas.width = nextDimensions.width
+  rotatedCanvas.height = nextDimensions.height
+
+  const rotatedContext = rotatedCanvas.getContext('2d')
+
+  if (!rotatedContext) {
+    return {
+      canvas: sourceCanvas,
+      width: sourceCanvas.width,
+      height: sourceCanvas.height,
+    }
+  }
+
+  rotatedContext.translate(rotatedCanvas.width / 2, rotatedCanvas.height / 2)
+  rotatedContext.rotate(Math.PI / 2)
+  rotatedContext.drawImage(
+    sourceCanvas,
+    -sourceCanvas.width / 2,
+    -sourceCanvas.height / 2,
+    sourceCanvas.width,
+    sourceCanvas.height,
+  )
+
+  return {
+    canvas: rotatedCanvas,
+    width: rotatedCanvas.width,
+    height: rotatedCanvas.height,
+  }
 }
 
 async function buildDisplayImage(source: string) {
@@ -95,10 +130,33 @@ async function buildDisplayImage(source: string) {
     trimmedHeight <= 0 ||
     (trimmedWidth === width && trimmedHeight === height)
   ) {
+    const nextDimensions = getHorizontalDisplayDimensions(width, height)
+
+    if (!nextDimensions.shouldRotate) {
+      return {
+        src: source,
+        width,
+        height,
+      }
+    }
+
+    const rotatedSource = rotateCanvasToHorizontal(canvas)
+    const rotatedBlob = await new Promise<Blob | null>((resolve) => {
+      rotatedSource.canvas.toBlob(resolve, 'image/png')
+    })
+
+    if (!rotatedBlob) {
+      return {
+        src: source,
+        width,
+        height,
+      }
+    }
+
     return {
-      src: source,
-      width,
-      height,
+      src: URL.createObjectURL(rotatedBlob),
+      width: rotatedSource.width,
+      height: rotatedSource.height,
     }
   }
 
@@ -135,8 +193,16 @@ async function buildDisplayImage(source: string) {
     cropHeight,
   )
 
+  const normalizedCanvas = getHorizontalDisplayDimensions(trimmedCanvas.width, trimmedCanvas.height).shouldRotate
+    ? rotateCanvasToHorizontal(trimmedCanvas)
+    : {
+        canvas: trimmedCanvas,
+        width: trimmedCanvas.width,
+        height: trimmedCanvas.height,
+      }
+
   const trimmedBlob = await new Promise<Blob | null>((resolve) => {
-    trimmedCanvas.toBlob(resolve, 'image/png')
+    normalizedCanvas.canvas.toBlob(resolve, 'image/png')
   })
 
   if (!trimmedBlob) {
@@ -149,8 +215,8 @@ async function buildDisplayImage(source: string) {
 
   return {
     src: URL.createObjectURL(trimmedBlob),
-    width: cropWidth,
-    height: cropHeight,
+    width: normalizedCanvas.width,
+    height: normalizedCanvas.height,
   }
 }
 
