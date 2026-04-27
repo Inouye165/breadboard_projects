@@ -1,6 +1,12 @@
 import { useRef, useState } from 'react'
 
-import type { BreadboardDefinition, ConnectionPoint } from '../lib/breadboardDefinitionModel'
+import type { BreadboardDefinition, ConnectionPoint, ScaleCalibration } from '../lib/breadboardDefinitionModel'
+
+type CalibrationStep =
+  | { kind: 'idle' }
+  | { kind: 'awaiting-first' }
+  | { kind: 'awaiting-second'; x1: number; y1: number }
+  | { kind: 'awaiting-distance'; x1: number; y1: number; x2: number; y2: number }
 
 type PinPointEditorProps = {
   definition: BreadboardDefinition
@@ -45,12 +51,16 @@ export function PinPointEditor({
   const svgRef = useRef<SVGSVGElement>(null)
   const [pendingRemovalId, setPendingRemovalId] = useState<string | null>(null)
   const [trackedDefinitionId, setTrackedDefinitionId] = useState(definition.id)
+  const [calibrationStep, setCalibrationStep] = useState<CalibrationStep>({ kind: 'idle' })
+  const [calibrationDistance, setCalibrationDistance] = useState('')
+  const [calibrationUnit, setCalibrationUnit] = useState<'mm' | 'in'>('in')
   const safeWidth = imageWidth > 0 ? imageWidth : 1
   const safeHeight = imageHeight > 0 ? imageHeight : 1
 
   if (trackedDefinitionId !== definition.id) {
     setTrackedDefinitionId(definition.id)
     setPendingRemovalId(null)
+    setCalibrationStep({ kind: 'idle' })
   }
 
   function getStageCoordinates(event: React.PointerEvent<SVGSVGElement>) {
@@ -93,6 +103,30 @@ export function PinPointEditor({
       return
     }
 
+    // Calibration mode intercepts clicks instead of placing pin holes.
+    if (calibrationStep.kind === 'awaiting-first') {
+      setCalibrationStep({ kind: 'awaiting-second', x1: coordinates.x, y1: coordinates.y })
+      return
+    }
+
+    if (calibrationStep.kind === 'awaiting-second') {
+      setCalibrationStep({
+        kind: 'awaiting-distance',
+        x1: calibrationStep.x1,
+        y1: calibrationStep.y1,
+        x2: coordinates.x,
+        y2: coordinates.y,
+      })
+      setCalibrationDistance('')
+      return
+    }
+
+    if (calibrationStep.kind === 'awaiting-distance') {
+      // Re-click during distance entry restarts point selection.
+      setCalibrationStep({ kind: 'awaiting-first' })
+      return
+    }
+
     const newPoint: ConnectionPoint = {
       id: createPointId(),
       label: nextPointLabel(definition.points),
@@ -106,6 +140,38 @@ export function PinPointEditor({
       ...definition,
       points: [...definition.points, newPoint],
     })
+  }
+
+  function handleApplyCalibration() {
+    if (calibrationStep.kind !== 'awaiting-distance') {
+      return
+    }
+
+    const rawValue = Number.parseFloat(calibrationDistance)
+
+    if (!Number.isFinite(rawValue) || rawValue <= 0) {
+      return
+    }
+
+    const realDistanceMm = calibrationUnit === 'in' ? rawValue * 25.4 : rawValue
+    const calibration: ScaleCalibration = {
+      x1: calibrationStep.x1,
+      y1: calibrationStep.y1,
+      x2: calibrationStep.x2,
+      y2: calibrationStep.y2,
+      realDistanceMm,
+    }
+
+    onChange({ ...definition, scaleCalibration: calibration })
+    setCalibrationStep({ kind: 'idle' })
+    setCalibrationDistance('')
+  }
+
+  function handleClearCalibration() {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { scaleCalibration: _removed, ...rest } = definition
+    onChange(rest as BreadboardDefinition)
+    setCalibrationStep({ kind: 'idle' })
   }
 
   function handlePinClick(pointId: string) {
@@ -181,6 +247,19 @@ export function PinPointEditor({
             </button>
             <button
               type="button"
+              className={`action-button${calibrationStep.kind !== 'idle' ? '' : ' action-button--ghost'}`}
+              onClick={() =>
+                calibrationStep.kind === 'idle'
+                  ? setCalibrationStep({ kind: 'awaiting-first' })
+                  : setCalibrationStep({ kind: 'idle' })
+              }
+              disabled={isBusy}
+              aria-pressed={calibrationStep.kind !== 'idle'}
+            >
+              {calibrationStep.kind !== 'idle' ? 'Cancel scale' : 'Set scale'}
+            </button>
+            <button
+              type="button"
               className="action-button"
               onClick={onSaveAndFinish}
               disabled={isBusy}
@@ -191,10 +270,86 @@ export function PinPointEditor({
         </div>
       </header>
       <p className="pin-editor__hint">
-        Click the image to drop a pin hole. Click an existing pin once to select it, then click again to remove it. These points will be selectable later when wiring the breadboard.
+        {calibrationStep.kind === 'awaiting-first'
+          ? 'Click the first reference point on the breadboard image.'
+          : calibrationStep.kind === 'awaiting-second'
+          ? 'Click the second reference point. (Click the first point again to restart.)'
+          : calibrationStep.kind === 'awaiting-distance'
+          ? 'Enter the real-world distance between the two points below and click Apply.'
+          : 'Click the image to drop a pin hole. Click an existing pin once to select it, then click again to remove it. These points will be selectable later when wiring the breadboard.'}
       </p>
+      {calibrationStep.kind === 'awaiting-distance' ? (
+        <div className="pin-editor__calibration-form" role="group" aria-label="Set scale distance">
+          <label className="control-group" htmlFor="calibration-distance">
+            <span className="control-group__label">Distance between points</span>
+            <input
+              id="calibration-distance"
+              className="control-group__input"
+              type="number"
+              min="0.01"
+              step="any"
+              value={calibrationDistance}
+              onChange={(event) => setCalibrationDistance(event.target.value)}
+              placeholder={calibrationUnit === 'in' ? 'e.g. 6.0' : 'e.g. 152.4'}
+              aria-label="Distance value"
+            />
+          </label>
+          <label className="control-group" htmlFor="calibration-unit">
+            <span className="control-group__label">Unit</span>
+            <select
+              id="calibration-unit"
+              className="control-group__input"
+              value={calibrationUnit}
+              onChange={(event) => setCalibrationUnit(event.target.value as 'mm' | 'in')}
+            >
+              <option value="in">inches</option>
+              <option value="mm">mm</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className="action-button"
+            onClick={handleApplyCalibration}
+            disabled={Number.parseFloat(calibrationDistance) <= 0 || !calibrationDistance}
+          >
+            Apply
+          </button>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={() => setCalibrationStep({ kind: 'awaiting-first' })}
+          >
+            Re-pick points
+          </button>
+        </div>
+      ) : null}
+      {definition.scaleCalibration ? (
+        <p className="pin-editor__calibration-status" aria-live="polite">
+          Scale set:{' '}
+          {(definition.scaleCalibration.realDistanceMm / 25.4).toFixed(3)} in /{' '}
+          {definition.scaleCalibration.realDistanceMm.toFixed(2)} mm over{' '}
+          {Math.round(
+            Math.hypot(
+              definition.scaleCalibration.x2 - definition.scaleCalibration.x1,
+              definition.scaleCalibration.y2 - definition.scaleCalibration.y1,
+            ),
+          )}{' '}
+          px &nbsp;
+          <button
+            type="button"
+            className="action-button action-button--ghost action-button--inline"
+            onClick={handleClearCalibration}
+            disabled={isBusy}
+          >
+            Clear
+          </button>
+        </p>
+      ) : null}
       <section className="image-workspace__stage-shell">
-        <div className="image-stage" aria-label="Breadboard pin hole stage">
+        <div
+          className={`image-stage${calibrationStep.kind !== 'idle' ? ' image-stage--calibrating' : ''}`}
+          aria-label="Breadboard pin hole stage"
+        >
           <svg
             ref={svgRef}
             className="image-stage__svg pin-editor__svg"
@@ -209,6 +364,54 @@ export function PinPointEditor({
               height={safeHeight}
               preserveAspectRatio="none"
             />
+            {/* Saved calibration line */}
+            {definition.scaleCalibration && calibrationStep.kind === 'idle' ? (
+              <g className="pin-editor__calibration-overlay" aria-hidden="true">
+                <line
+                  x1={definition.scaleCalibration.x1}
+                  y1={definition.scaleCalibration.y1}
+                  x2={definition.scaleCalibration.x2}
+                  y2={definition.scaleCalibration.y2}
+                  stroke="#f59e0b"
+                  strokeWidth={3}
+                  strokeDasharray="8 4"
+                />
+                <circle cx={definition.scaleCalibration.x1} cy={definition.scaleCalibration.y1} r={8} fill="#f59e0b" fillOpacity={0.85} />
+                <circle cx={definition.scaleCalibration.x2} cy={definition.scaleCalibration.y2} r={8} fill="#f59e0b" fillOpacity={0.85} />
+              </g>
+            ) : null}
+            {/* Active calibration in-progress overlay */}
+            {calibrationStep.kind === 'awaiting-second' || calibrationStep.kind === 'awaiting-distance' ? (
+              <g className="pin-editor__calibration-overlay pin-editor__calibration-overlay--active" aria-hidden="true">
+                {calibrationStep.kind === 'awaiting-distance' ? (
+                  <line
+                    x1={calibrationStep.x1}
+                    y1={calibrationStep.y1}
+                    x2={calibrationStep.x2}
+                    y2={calibrationStep.y2}
+                    stroke="#3b82f6"
+                    strokeWidth={3}
+                    strokeDasharray="8 4"
+                  />
+                ) : null}
+                <circle
+                  cx={calibrationStep.x1}
+                  cy={calibrationStep.y1}
+                  r={9}
+                  fill="#3b82f6"
+                  fillOpacity={0.85}
+                />
+                {calibrationStep.kind === 'awaiting-distance' ? (
+                  <circle
+                    cx={calibrationStep.x2}
+                    cy={calibrationStep.y2}
+                    r={9}
+                    fill="#3b82f6"
+                    fillOpacity={0.85}
+                  />
+                ) : null}
+              </g>
+            ) : null}
             {definition.points.map((point) => {
               const isPending = pendingRemovalId === point.id
               const radius = Math.max(6, Math.min(safeWidth, safeHeight) * 0.008)

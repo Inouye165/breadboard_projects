@@ -4,12 +4,16 @@ import type { BreadboardDefinition, ConnectionPoint } from '../lib/breadboardDef
 import type {
   BreadboardProject,
   ProjectComponent,
+  ProjectModuleInstance,
   Wire,
 } from '../lib/breadboardProjectModel'
+import { estimatePixelsPerMm } from '../lib/breadboardScale'
+import type { LibraryPartDefinition } from '../lib/partLibraryModel'
 
 type ProjectViewProps = {
   project: BreadboardProject
   breadboard: BreadboardDefinition
+  libraryParts?: LibraryPartDefinition[]
   status: string
   onBack: () => void
   onEdit?: () => void
@@ -36,9 +40,18 @@ function describeComponent(component: ProjectComponent) {
     : component.label
 }
 
-export function ProjectView({ project, breadboard, status, onBack, onEdit }: ProjectViewProps) {
+export function ProjectView({ project, breadboard, libraryParts = [], status, onBack, onEdit }: ProjectViewProps) {
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
+  const pixelsPerMm = useMemo(() => estimatePixelsPerMm(breadboard), [breadboard])
+  const libraryPartIndex = useMemo(() => {
+    const map = new Map<string, LibraryPartDefinition>()
+    for (const part of libraryParts) {
+      map.set(part.id, part)
+    }
+    return map
+  }, [libraryParts])
+  const modules: ProjectModuleInstance[] = useMemo(() => project.modules ?? [], [project.modules])
 
   const wireRows = useMemo(() => {
     return project.wires.map((wire) => {
@@ -113,6 +126,53 @@ export function ProjectView({ project, breadboard, status, onBack, onEdit }: Pro
                 height={safeHeight}
                 preserveAspectRatio="none"
               />
+              {modules.map((instance) => {
+                const part = libraryPartIndex.get(instance.libraryPartId)
+
+                if (!part) {
+                  return null
+                }
+
+                const view =
+                  part.imageViews.find((entry) => entry.id === instance.viewId) ??
+                  part.imageViews[0]
+                const widthPx = part.dimensions.widthMm * pixelsPerMm
+                const heightPx = part.dimensions.heightMm * pixelsPerMm
+
+                if (widthPx <= 0 || heightPx <= 0) {
+                  return null
+                }
+
+                return (
+                  <g
+                    key={instance.id}
+                    className="project-view__module"
+                    transform={`rotate(${instance.rotationDeg} ${instance.centerX} ${instance.centerY})`}
+                    aria-label={`Module ${part.name}`}
+                  >
+                    {view ? (
+                      <image
+                        href={view.imagePath}
+                        x={instance.centerX - widthPx / 2}
+                        y={instance.centerY - heightPx / 2}
+                        width={widthPx}
+                        height={heightPx}
+                        preserveAspectRatio="none"
+                      />
+                    ) : null}
+                    <rect
+                      x={instance.centerX - widthPx / 2}
+                      y={instance.centerY - heightPx / 2}
+                      width={widthPx}
+                      height={heightPx}
+                      fill="transparent"
+                      stroke="#444"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 3"
+                    />
+                  </g>
+                )
+              })}
               {renderableSegments.map(({ wire, fromPoint, toPoint, fromLabel, toLabel }) => (
                 <polyline
                   key={wire.id}

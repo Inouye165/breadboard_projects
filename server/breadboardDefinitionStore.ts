@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import type { BreadboardDefinition, ConnectionPoint } from '../src/lib/breadboardDefinitionModel'
+import type { BreadboardDefinition, ConnectionPoint, ScaleCalibration } from '../src/lib/breadboardDefinitionModel'
 
 type JsonObject = Record<string, unknown>
 
@@ -51,6 +51,27 @@ function normalizeConnectionPoint(value: unknown): ConnectionPoint {
   }
 }
 
+function normalizeScaleCalibration(value: unknown): ScaleCalibration | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+
+  const { x1, y1, x2, y2, realDistanceMm } = value
+
+  if (
+    typeof x1 !== 'number' ||
+    typeof y1 !== 'number' ||
+    typeof x2 !== 'number' ||
+    typeof y2 !== 'number' ||
+    typeof realDistanceMm !== 'number' ||
+    realDistanceMm <= 0
+  ) {
+    return undefined
+  }
+
+  return { x1, y1, x2, y2, realDistanceMm }
+}
+
 function normalizeBreadboardDefinition(
   value: unknown,
   existingDefinition?: BreadboardDefinition,
@@ -85,6 +106,7 @@ function normalizeBreadboardDefinition(
     imageWidth: value.imageWidth,
     imageHeight: value.imageHeight,
     points: value.points.map(normalizeConnectionPoint),
+    scaleCalibration: normalizeScaleCalibration(value.scaleCalibration),
     createdAt,
     updatedAt,
   }

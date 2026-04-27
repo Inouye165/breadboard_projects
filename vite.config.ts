@@ -18,15 +18,25 @@ import {
   readBreadboardProject,
   saveBreadboardProject,
 } from './server/breadboardProjectStore'
+import {
+  deleteLibraryPart,
+  listLibraryParts,
+  readLibraryPart,
+  saveLibraryPart,
+} from './server/partLibraryStore'
 
 const WORKSPACE_STORAGE_DIR = path.resolve(__dirname, '.breadboard-local')
 const BREADBOARD_DEFINITIONS_DIR = path.join(WORKSPACE_STORAGE_DIR, 'definitions')
 const BREADBOARD_PROJECTS_DIR = path.join(WORKSPACE_STORAGE_DIR, 'projects')
+const LIBRARY_PARTS_DIR = path.join(WORKSPACE_STORAGE_DIR, 'library-parts')
+const LIBRARY_PART_IMAGES_DIR = path.join(WORKSPACE_STORAGE_DIR, 'parts')
 const WORKSPACE_IMAGE_DIR = path.join(WORKSPACE_STORAGE_DIR, 'images')
 const WORKSPACE_METADATA_FILE = path.join(WORKSPACE_STORAGE_DIR, 'workspace.json')
 const WORKSPACE_IMAGE_BASE_PATH = '/__breadboard_local__/images/'
+const LIBRARY_PART_IMAGE_BASE_PATH = '/__breadboard_local__/parts/'
 const PART_DEFINITIONS_ENDPOINT = '/api/part-definitions'
 const PROJECTS_ENDPOINT = '/api/projects'
+const LIBRARY_PARTS_ENDPOINT = '/api/library-parts'
 
 type AlignmentPoint = {
   x: number
@@ -162,6 +172,38 @@ function getProjectIdFromRequest(url: string) {
   const [projectId] = remainder.slice(1).split('/', 1)
 
   return projectId ? decodeURIComponent(projectId) : null
+}
+
+type LibraryPartRoute = {
+  partId: string
+  subPath: string
+}
+
+function parseLibraryPartRoute(url: string): LibraryPartRoute | null {
+  if (!url.startsWith(LIBRARY_PARTS_ENDPOINT)) {
+    return null
+  }
+
+  const [pathPortion] = url.split('?', 1)
+  const remainder = pathPortion.slice(LIBRARY_PARTS_ENDPOINT.length)
+
+  if (remainder === '' || remainder === '/') {
+    return { partId: '', subPath: '' }
+  }
+
+  if (!remainder.startsWith('/')) {
+    return null
+  }
+
+  const segments = remainder.slice(1).split('/')
+  const partId = segments[0] ? decodeURIComponent(segments[0]) : ''
+  const subPath = segments.slice(1).join('/')
+
+  return { partId, subPath }
+}
+
+function sanitizeIdSegment(value: string) {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-')
 }
 
 async function handleWorkspaceRequest(
@@ -409,9 +451,205 @@ async function handleProjectRequest(
   return false
 }
 
+type LibraryPartImageUploadPayload = {
+  contentsBase64?: string
+  name?: string
+  side?: string
+  label?: string
+  imageWidth?: number
+  imageHeight?: number
+}
+
+async function handleLibraryPartImageUpload(
+  request: MiddlewareRequest,
+  response: MiddlewareResponse,
+  partId: string,
+) {
+  if (request.method !== 'POST') {
+    return false
+  }
+
+  if (!partId) {
+    sendJson(response, 400, { error: 'Missing part id.' })
+    return true
+  }
+
+  try {
+    const payload = JSON.parse(await readRequestBody(request)) as LibraryPartImageUploadPayload
+
+    if (!payload.name || !payload.contentsBase64) {
+      sendJson(response, 400, { error: 'Missing image upload payload.' })
+      return true
+    }
+
+    const safePartId = sanitizeIdSegment(partId)
+    const partImageDir = path.join(LIBRARY_PART_IMAGES_DIR, safePartId)
+    await mkdir(partImageDir, { recursive: true })
+
+    const fileName = `${Date.now()}-${sanitizeFileName(payload.name) || 'part-image.png'}`
+    const filePath = path.join(partImageDir, fileName)
+
+    await writeFile(filePath, Buffer.from(payload.contentsBase64, 'base64'))
+
+    sendJson(response, 200, {
+      image: {
+        imageName: payload.name,
+        imagePath: `${LIBRARY_PART_IMAGE_BASE_PATH}${safePartId}/${fileName}`,
+        imageWidth: typeof payload.imageWidth === 'number' ? payload.imageWidth : 0,
+        imageHeight: typeof payload.imageHeight === 'number' ? payload.imageHeight : 0,
+      },
+    })
+  } catch {
+    sendJson(response, 400, { error: 'Could not save the uploaded part image.' })
+  }
+
+  return true
+}
+
+async function handleLibraryPartRequest(
+  request: MiddlewareRequest,
+  response: MiddlewareResponse,
+) {
+  const requestUrl = request.url ?? ''
+  const route = parseLibraryPartRoute(requestUrl)
+
+  if (!route) {
+    return false
+  }
+
+  const { partId, subPath } = route
+
+  if (subPath === 'images') {
+    return handleLibraryPartImageUpload(request, response, partId)
+  }
+
+  if (request.method === 'GET' && partId === '') {
+    sendJson(response, 200, { parts: await listLibraryParts(LIBRARY_PARTS_DIR) })
+    return true
+  }
+
+  if (request.method === 'GET' && partId) {
+    const part = await readLibraryPart(LIBRARY_PARTS_DIR, partId)
+
+    if (!part) {
+      sendJson(response, 404, { error: 'Library part not found.' })
+      return true
+    }
+
+    sendJson(response, 200, { part })
+    return true
+  }
+
+  if (request.method === 'POST' && partId === '') {
+    try {
+      const part = await saveLibraryPart(
+        LIBRARY_PARTS_DIR,
+        JSON.parse(await readRequestBody(request)),
+      )
+
+      sendJson(response, 200, { part })
+    } catch {
+      sendJson(response, 400, { error: 'Invalid library part payload.' })
+    }
+
+    return true
+  }
+
+  if (request.method === 'PUT' && partId) {
+    try {
+      const payload = JSON.parse(await readRequestBody(request)) as { id?: string }
+
+      if (payload.id !== partId) {
+        sendJson(response, 400, { error: 'Library part id mismatch.' })
+        return true
+      }
+
+      const part = await saveLibraryPart(LIBRARY_PARTS_DIR, payload)
+
+      sendJson(response, 200, { part })
+    } catch {
+      sendJson(response, 400, { error: 'Invalid library part payload.' })
+    }
+
+    return true
+  }
+
+  if (request.method === 'DELETE' && partId) {
+    const deleted = await deleteLibraryPart(LIBRARY_PARTS_DIR, partId, LIBRARY_PART_IMAGES_DIR)
+
+    if (!deleted) {
+      sendJson(response, 404, { error: 'Library part not found.' })
+      return true
+    }
+
+    sendJson(response, 200, { success: true })
+    return true
+  }
+
+  return false
+}
+
+async function handleLibraryPartImageRead(
+  request: MiddlewareRequest,
+  response: MiddlewareResponse,
+) {
+  if (request.method !== 'GET' || !request.url) {
+    return false
+  }
+
+  const [pathPortion] = request.url.split('?', 1)
+  const relativePath = pathPortion.slice(LIBRARY_PART_IMAGE_BASE_PATH.length)
+
+  if (!relativePath || relativePath.includes('..')) {
+    response.statusCode = 404
+    response.end()
+    return true
+  }
+
+  const filePath = path.join(LIBRARY_PART_IMAGES_DIR, relativePath)
+
+  try {
+    const fileStat = await stat(filePath)
+
+    if (!fileStat.isFile()) {
+      response.statusCode = 404
+      response.end()
+      return true
+    }
+
+    response.statusCode = 200
+    response.setHeader('Cache-Control', 'no-store')
+    response.setHeader('Content-Type', getContentType(filePath))
+    createReadStream(filePath).pipe(response)
+  } catch {
+    response.statusCode = 404
+    response.end()
+  }
+
+  return true
+}
+
 function createWorkspacePersistenceMiddleware() {
   return (request: MiddlewareRequest, response: MiddlewareResponse, next: NextHandler) => {
     const requestUrl = request.url ?? ''
+
+    if (requestUrl.startsWith(LIBRARY_PARTS_ENDPOINT)) {
+      void handleLibraryPartRequest(request, response).then((handled) => {
+        if (!handled) {
+          next()
+        }
+      })
+      return
+    }
+
+    if (requestUrl.startsWith(LIBRARY_PART_IMAGE_BASE_PATH)) {
+      void handleLibraryPartImageRead(request, response).then((handled) => {
+        if (!handled) {
+          next()
+        }
+      })
+      return
+    }
 
     if (requestUrl.startsWith(PART_DEFINITIONS_ENDPOINT)) {
       void handlePartDefinitionRequest(request, response).then((handled) => {

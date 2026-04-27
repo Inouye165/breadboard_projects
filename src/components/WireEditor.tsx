@@ -5,19 +5,32 @@ import type { BreadboardDefinition, ConnectionPoint } from '../lib/breadboardDef
 import {
   PROJECT_COMPONENT_KINDS,
   createProjectComponentId,
+  createProjectModuleInstanceId,
   createWireId,
   type BreadboardProject,
   type ProjectComponent,
   type ProjectComponentKind,
+  type ProjectModuleInstance,
   type Wire,
   type WireWaypoint,
 } from '../lib/breadboardProjectModel'
+import { estimatePixelsPerMm } from '../lib/breadboardScale'
+import {
+  PART_CATEGORIES,
+  type LibraryPartDefinition,
+  type PartCategory,
+  type PhysicalPoint,
+} from '../lib/partLibraryModel'
 
 const WIRE_COLORS = ['#cc3333', '#1f8e4d', '#1f5fcc', '#e08a00', '#7a3fc6', '#000000']
+
+/** Snap threshold in millimeters. One standard 0.1" pin pitch = 2.54 mm. */
+const SNAP_THRESHOLD_MM = 1.3
 
 type WireEditorProps = {
   project: BreadboardProject
   breadboard: BreadboardDefinition
+  libraryParts?: LibraryPartDefinition[]
   isBusy?: boolean
   status: string
   onBack: () => void
@@ -35,8 +48,83 @@ type DragState = {
   position: WireVertex
 }
 
+type ModuleDragState = {
+  moduleId: string
+  pointerOffsetX: number
+  pointerOffsetY: number
+  /** Raw (unsnapped) center position following the pointer. */
+  position: WireVertex
+  /** Snapped center to show in the SVG, or null if no snap in range. */
+  snappedPosition: WireVertex | null
+  /** Breadboard pin being targeted for snap, or null. */
+  snapPinId: string | null
+}
+
 function nextWireColor(wires: Wire[]) {
   return WIRE_COLORS[wires.length % WIRE_COLORS.length]
+}
+
+/** Physical points that can snap to breadboard holes (through-hole header pins). */
+function isSnapPoint(pt: PhysicalPoint) {
+  return pt.throughHole === true || pt.kind === 'header-pin'
+}
+
+type SnapResult = {
+  /** Snapped module center, or the original candidate if no snap found. */
+  center: WireVertex
+  /** Breadboard point id that was snapped to, or null. */
+  snapPinId: string | null
+}
+
+/**
+ * Find the best snap for a module being placed at `candidateCenter`.
+ * Iterates all snap-eligible physical points of the part against every
+ * breadboard connection point and, if any pair is within the threshold,
+ * shifts the whole module center so that physical point lands on the
+ * breadboard pin exactly. Respects the current rotation of the instance.
+ */
+function computeSnapResult(
+  candidateCenter: WireVertex,
+  rotationDeg: number,
+  part: LibraryPartDefinition,
+  pixelsPerMm: number,
+  breadboardPoints: ConnectionPoint[],
+  snapThresholdPx: number,
+): SnapResult {
+  const widthPx = part.dimensions.widthMm * pixelsPerMm
+  const heightPx = part.dimensions.heightMm * pixelsPerMm
+  const angleRad = (rotationDeg * Math.PI) / 180
+  const cosA = Math.cos(angleRad)
+  const sinA = Math.sin(angleRad)
+  const snapPoints = part.physicalPoints.filter(isSnapPoint)
+
+  let bestDistSq = snapThresholdPx * snapThresholdPx
+  let bestCenter: WireVertex | null = null
+  let bestPinId: string | null = null
+
+  for (const physPt of snapPoints) {
+    // Offset from module center in pixel space (pre-rotation)
+    const dx = physPt.xMm * pixelsPerMm - widthPx / 2
+    const dy = physPt.yMm * pixelsPerMm - heightPx / 2
+    // Apply rotation around module center
+    const rotDx = dx * cosA - dy * sinA
+    const rotDy = dx * sinA + dy * cosA
+    // Absolute canvas position of this physical point
+    const absX = candidateCenter.x + rotDx
+    const absY = candidateCenter.y + rotDy
+
+    for (const boardPt of breadboardPoints) {
+      const distSq = (boardPt.x - absX) ** 2 + (boardPt.y - absY) ** 2
+
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq
+        bestPinId = boardPt.id
+        bestCenter = { x: boardPt.x - rotDx, y: boardPt.y - rotDy }
+      }
+    }
+  }
+
+  return { center: bestCenter ?? candidateCenter, snapPinId: bestPinId }
 }
 
 function findPoint(points: ConnectionPoint[], pointId: string) {
@@ -67,6 +155,7 @@ function replaceWaypoints(wire: Wire, waypoints: WireWaypoint[]): Wire {
 export function WireEditor({
   project,
   breadboard,
+  libraryParts = [],
   isBusy = false,
   status,
   onBack,
@@ -77,14 +166,27 @@ export function WireEditor({
   const [pendingRemovalWireId, setPendingRemovalWireId] = useState<string | null>(null)
   const [trackedProjectId, setTrackedProjectId] = useState(project.id)
   const [dragState, setDragState] = useState<DragState | null>(null)
+  const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null)
+  const [moduleDragState, setModuleDragState] = useState<ModuleDragState | null>(null)
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
+  const pixelsPerMm = useMemo(() => estimatePixelsPerMm(breadboard), [breadboard])
+  const libraryPartIndex = useMemo(() => {
+    const map = new Map<string, LibraryPartDefinition>()
+    for (const part of libraryParts) {
+      map.set(part.id, part)
+    }
+    return map
+  }, [libraryParts])
+  const modules = useMemo(() => project.modules ?? [], [project.modules])
 
   if (trackedProjectId !== project.id) {
     setTrackedProjectId(project.id)
     setPendingFromPointId(null)
     setPendingRemovalWireId(null)
     setDragState(null)
+    setSelectedModuleId(null)
+    setModuleDragState(null)
   }
 
   const wireSegments = useMemo(() => {
@@ -222,6 +324,210 @@ export function WireEditor({
     onChange({
       ...project,
       components: nextComponents.length === 0 ? undefined : nextComponents,
+    })
+  }
+
+  function updateModule(
+    moduleId: string,
+    transform: (instance: ProjectModuleInstance) => ProjectModuleInstance,
+  ) {
+    const nextModules = (project.modules ?? []).map((instance) =>
+      instance.id === moduleId ? transform(instance) : instance,
+    )
+
+    onChange({
+      ...project,
+      modules: nextModules.length === 0 ? undefined : nextModules,
+    })
+  }
+
+  function handleAddModule(libraryPartId: string) {
+    const part = libraryPartIndex.get(libraryPartId)
+
+    if (!part) {
+      return
+    }
+
+    const newModule: ProjectModuleInstance = {
+      id: createProjectModuleInstanceId(),
+      libraryPartId,
+      viewId: part.imageViews[0]?.id,
+      centerX: safeWidth / 2,
+      centerY: safeHeight / 2,
+      rotationDeg: 0,
+    }
+
+    onChange({
+      ...project,
+      modules: [...(project.modules ?? []), newModule],
+    })
+    setSelectedModuleId(newModule.id)
+  }
+
+  function handleRemoveModule(moduleId: string) {
+    const nextModules = (project.modules ?? []).filter((instance) => instance.id !== moduleId)
+
+    onChange({
+      ...project,
+      modules: nextModules.length === 0 ? undefined : nextModules,
+    })
+
+    if (selectedModuleId === moduleId) {
+      setSelectedModuleId(null)
+    }
+  }
+
+  function handleRotateModule(moduleId: string, deltaDeg: number) {
+    updateModule(moduleId, (instance) => ({
+      ...instance,
+      rotationDeg: ((instance.rotationDeg + deltaDeg) % 360 + 360) % 360,
+    }))
+  }
+
+  function handleSetModuleRotation(moduleId: string, rotationDeg: number) {
+    updateModule(moduleId, (instance) => ({
+      ...instance,
+      rotationDeg: ((rotationDeg % 360) + 360) % 360,
+    }))
+  }
+
+  function handleAlignModuleToPin(moduleId: string) {
+    const instance = (project.modules ?? []).find((entry) => entry.id === moduleId)
+
+    if (!instance || breadboard.points.length === 0) {
+      return
+    }
+
+    const part = libraryPartIndex.get(instance.libraryPartId)
+
+    if (!part) {
+      return
+    }
+
+    // Use a very large threshold so align-to-pin always finds the nearest pair
+    const largeThresholdPx = Math.max(safeWidth, safeHeight)
+    const { center } = computeSnapResult(
+      { x: instance.centerX, y: instance.centerY },
+      instance.rotationDeg,
+      part,
+      pixelsPerMm,
+      breadboard.points,
+      largeThresholdPx,
+    )
+
+    updateModule(moduleId, (entry) => ({
+      ...entry,
+      centerX: Math.max(0, Math.min(safeWidth, center.x)),
+      centerY: Math.max(0, Math.min(safeHeight, center.y)),
+    }))
+  }
+
+  function handleModulePointerDown(
+    event: React.PointerEvent<SVGGElement>,
+    instance: ProjectModuleInstance,
+  ) {
+    if (event.button !== 0) {
+      return
+    }
+
+    event.stopPropagation()
+    setSelectedModuleId(instance.id)
+    setPendingFromPointId(null)
+    setPendingRemovalWireId(null)
+
+    const coords = getSvgCoordinates(event)
+
+    if (!coords) {
+      return
+    }
+
+    if (typeof event.currentTarget.setPointerCapture === 'function') {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
+
+    setModuleDragState({
+      moduleId: instance.id,
+      pointerOffsetX: coords.x - instance.centerX,
+      pointerOffsetY: coords.y - instance.centerY,
+      position: { x: instance.centerX, y: instance.centerY },
+      snappedPosition: null,
+      snapPinId: null,
+    })
+  }
+
+  function handleModulePointerMove(event: React.PointerEvent<SVGGElement>) {
+    if (!moduleDragState) {
+      return
+    }
+
+    const coords = getSvgCoordinates(event)
+
+    if (!coords) {
+      return
+    }
+
+    const rawPosition = {
+      x: coords.x - moduleDragState.pointerOffsetX,
+      y: coords.y - moduleDragState.pointerOffsetY,
+    }
+    const instance = (project.modules ?? []).find((entry) => entry.id === moduleDragState.moduleId)
+    const part = instance ? libraryPartIndex.get(instance.libraryPartId) : undefined
+
+    if (part && instance) {
+      const { center: snappedPosition, snapPinId } = computeSnapResult(
+        rawPosition,
+        instance.rotationDeg,
+        part,
+        pixelsPerMm,
+        breadboard.points,
+        SNAP_THRESHOLD_MM * pixelsPerMm,
+      )
+      setModuleDragState({
+        ...moduleDragState,
+        position: rawPosition,
+        snappedPosition: snapPinId ? snappedPosition : null,
+        snapPinId,
+      })
+    } else {
+      setModuleDragState({
+        ...moduleDragState,
+        position: rawPosition,
+        snappedPosition: null,
+        snapPinId: null,
+      })
+    }
+  }
+
+  function handleModulePointerUp(event: React.PointerEvent<SVGGElement>) {
+    if (!moduleDragState) {
+      return
+    }
+
+    const coords = getSvgCoordinates(event)
+    const rawPosition = coords
+      ? { x: coords.x - moduleDragState.pointerOffsetX, y: coords.y - moduleDragState.pointerOffsetY }
+      : moduleDragState.position
+    const moduleId = moduleDragState.moduleId
+
+    if (
+      typeof event.currentTarget.hasPointerCapture === 'function' &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    setModuleDragState(null)
+    updateModule(moduleId, (instance) => {
+      const part = libraryPartIndex.get(instance.libraryPartId)
+      const { center } = part
+        ? computeSnapResult(rawPosition, instance.rotationDeg, part, pixelsPerMm, breadboard.points, SNAP_THRESHOLD_MM * pixelsPerMm)
+        : { center: rawPosition }
+
+      return {
+        ...instance,
+        centerX: Math.max(0, Math.min(safeWidth, center.x)),
+        centerY: Math.max(0, Math.min(safeHeight, center.y)),
+      }
     })
   }
 
@@ -404,6 +710,69 @@ export function WireEditor({
               height={safeHeight}
               preserveAspectRatio="none"
             />
+            {modules.map((instance) => {
+              const part = libraryPartIndex.get(instance.libraryPartId)
+
+              if (!part) {
+                return null
+              }
+
+              const view =
+                part.imageViews.find((entry) => entry.id === instance.viewId) ??
+                part.imageViews[0]
+              const widthPx = part.dimensions.widthMm * pixelsPerMm
+              const heightPx = part.dimensions.heightMm * pixelsPerMm
+
+              if (widthPx <= 0 || heightPx <= 0) {
+                return null
+              }
+
+              const isDragging = moduleDragState?.moduleId === instance.id
+              const rawCenter = isDragging && moduleDragState ? moduleDragState.position : { x: instance.centerX, y: instance.centerY }
+              // During drag, show the snapped position if a snap is in range
+              const center = isDragging && moduleDragState?.snappedPosition
+                ? moduleDragState.snappedPosition
+                : rawCenter
+              const isSelected = selectedModuleId === instance.id
+              const isSnapping = isDragging && moduleDragState?.snapPinId !== null
+
+              return (
+                <g
+                  key={instance.id}
+                  className={`wire-editor__module${isSelected ? ' wire-editor__module--selected' : ''}${isSnapping ? ' wire-editor__module--snapping' : ''}`}
+                  data-module-id={instance.id}
+                  transform={`rotate(${instance.rotationDeg} ${center.x} ${center.y})`}
+                  onPointerDown={(event) => handleModulePointerDown(event, instance)}
+                  onPointerMove={handleModulePointerMove}
+                  onPointerUp={handleModulePointerUp}
+                  onPointerCancel={handleModulePointerUp}
+                  role="button"
+                  aria-label={`Module ${part.name} (${part.category})`}
+                  style={{ cursor: 'move' }}
+                >
+                  {view ? (
+                    <image
+                      href={view.imagePath}
+                      x={center.x - widthPx / 2}
+                      y={center.y - heightPx / 2}
+                      width={widthPx}
+                      height={heightPx}
+                      preserveAspectRatio="none"
+                    />
+                  ) : null}
+                  <rect
+                    x={center.x - widthPx / 2}
+                    y={center.y - heightPx / 2}
+                    width={widthPx}
+                    height={heightPx}
+                    fill="transparent"
+                    stroke={isSnapping ? '#1f8e4d' : isSelected ? '#1f5fcc' : '#444'}
+                    strokeWidth={isSnapping ? 3.5 : isSelected ? 3 : 1.5}
+                    strokeDasharray={isSelected || isSnapping ? undefined : '4 3'}
+                  />
+                </g>
+              )
+            })}
             {wireSegments.map(({ wire, fromPoint, toPoint }) => {
               const isPending = pendingRemovalWireId === wire.id
               const baseVertices = getWireVertices(wire, fromPoint, toPoint)
@@ -503,9 +872,22 @@ export function WireEditor({
             })}
             {breadboard.points.map((point) => {
               const isPendingFrom = pendingFromPointId === point.id
+              const isSnapTarget = moduleDragState?.snapPinId === point.id
 
               return (
                 <g key={point.id} className="pin-editor__pin-group">
+                  {isSnapTarget ? (
+                    <circle
+                      className="wire-editor__snap-target"
+                      cx={point.x}
+                      cy={point.y}
+                      r={radius * 2.2}
+                      fill="none"
+                      stroke="#1f8e4d"
+                      strokeWidth={2.5}
+                      aria-hidden="true"
+                    />
+                  ) : null}
                   <circle
                     data-pin-point-id={point.id}
                     className={`pin-editor__pin wire-editor__pin${isPendingFrom ? ' wire-editor__pin--pending-from' : ''}`}
@@ -530,6 +912,18 @@ export function WireEditor({
           </svg>
         </div>
       </section>
+      <ModulesPanel
+        libraryParts={libraryParts}
+        modules={modules}
+        selectedModuleId={selectedModuleId}
+        isBusy={isBusy}
+        onSelect={setSelectedModuleId}
+        onAdd={handleAddModule}
+        onRemove={handleRemoveModule}
+        onRotate={handleRotateModule}
+        onSetRotation={handleSetModuleRotation}
+        onAlignToPin={handleAlignModuleToPin}
+      />
       <ComponentsPanel
         components={project.components ?? []}
         isBusy={isBusy}
@@ -643,6 +1037,222 @@ function ComponentsPanel({ components, isBusy, onAdd, onRemove }: ComponentsPane
               </button>
             </li>
           ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+type ModulesPanelProps = {
+  libraryParts: LibraryPartDefinition[]
+  modules: ProjectModuleInstance[]
+  selectedModuleId: string | null
+  isBusy: boolean
+  onSelect: (moduleId: string | null) => void
+  onAdd: (libraryPartId: string) => void
+  onRemove: (moduleId: string) => void
+  onRotate: (moduleId: string, deltaDeg: number) => void
+  onSetRotation: (moduleId: string, rotationDeg: number) => void
+  onAlignToPin: (moduleId: string) => void
+}
+
+function ModulesPanel({
+  libraryParts,
+  modules,
+  selectedModuleId,
+  isBusy,
+  onSelect,
+  onAdd,
+  onRemove,
+  onRotate,
+  onSetRotation,
+  onAlignToPin,
+}: ModulesPanelProps) {
+  const placeableParts = useMemo(
+    () => libraryParts.filter((part) => part.dimensions.widthMm > 0 && part.dimensions.heightMm > 0),
+    [libraryParts],
+  )
+  const availableCategories = useMemo(() => {
+    const present = new Set(placeableParts.map((part) => part.category))
+    return PART_CATEGORIES.filter((category) => present.has(category))
+  }, [placeableParts])
+  const [draftCategory, setDraftCategory] = useState<PartCategory | ''>('')
+  const [draftPartId, setDraftPartId] = useState<string>('')
+
+  const effectiveCategory: PartCategory | '' =
+    draftCategory && availableCategories.includes(draftCategory)
+      ? draftCategory
+      : (availableCategories[0] ?? '')
+
+  const partsInCategory = useMemo(() => {
+    if (!effectiveCategory) {
+      return [] as LibraryPartDefinition[]
+    }
+    return placeableParts.filter((part) => part.category === effectiveCategory)
+  }, [effectiveCategory, placeableParts])
+
+  const partIndex = useMemo(() => {
+    const map = new Map<string, LibraryPartDefinition>()
+    for (const part of libraryParts) {
+      map.set(part.id, part)
+    }
+    return map
+  }, [libraryParts])
+
+  const effectivePartId =
+    partsInCategory.find((part) => part.id === draftPartId)?.id ?? partsInCategory[0]?.id ?? ''
+
+  function handleAdd() {
+    if (!effectivePartId) {
+      return
+    }
+    onAdd(effectivePartId)
+  }
+
+  return (
+    <section className="components-panel modules-panel" aria-label="Project modules">
+      <header className="components-panel__header">
+        <h2 className="components-panel__title">Modules</h2>
+        <p className="components-panel__hint">
+          Place sensors, microcontrollers, and other library modules. Drag to position, rotate to
+          fit, and align to the nearest pin hole. All modules render at the breadboard&apos;s
+          physical scale.
+        </p>
+      </header>
+      {placeableParts.length === 0 ? (
+        <p className="components-panel__empty">
+          No library modules with image + dimensions yet. Open the Library tab to create one.
+        </p>
+      ) : (
+        <div className="components-panel__form" role="group" aria-label="Add module">
+          <label className="control-group" htmlFor="module-category">
+            <span className="control-group__label">Family</span>
+            <select
+              id="module-category"
+              className="control-group__input"
+              value={effectiveCategory}
+              onChange={(event) => {
+                setDraftCategory(event.target.value as PartCategory)
+                setDraftPartId('')
+              }}
+              disabled={isBusy}
+            >
+              {availableCategories.map((category) => (
+                <option key={category} value={category}>
+                  {category.charAt(0).toUpperCase() + category.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control-group" htmlFor="module-part">
+            <span className="control-group__label">Module</span>
+            <select
+              id="module-part"
+              className="control-group__input"
+              value={effectivePartId}
+              onChange={(event) => setDraftPartId(event.target.value)}
+              disabled={isBusy || partsInCategory.length === 0}
+            >
+              {partsInCategory.map((part) => (
+                <option key={part.id} value={part.id}>
+                  {part.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="action-button"
+            onClick={handleAdd}
+            disabled={isBusy || !effectivePartId}
+          >
+            Add module
+          </button>
+        </div>
+      )}
+      {modules.length === 0 ? (
+        <p className="components-panel__empty">No modules placed yet.</p>
+      ) : (
+        <ul className="components-panel__list" aria-label="Placed modules">
+          {modules.map((instance) => {
+            const part = partIndex.get(instance.libraryPartId)
+            const isSelected = selectedModuleId === instance.id
+            const displayName = part?.name ?? 'Unknown module'
+
+            return (
+              <li
+                key={instance.id}
+                className={`components-panel__item${isSelected ? ' components-panel__item--selected' : ''}`}
+              >
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => onSelect(isSelected ? null : instance.id)}
+                  aria-pressed={isSelected}
+                  aria-label={`${isSelected ? 'Deselect' : 'Select'} ${displayName}`}
+                >
+                  {isSelected ? 'Selected' : 'Select'}
+                </button>
+                <span className="components-panel__item-kind">{part?.category ?? 'module'}</span>
+                <span className="components-panel__item-label">{displayName}</span>
+                <span className="components-panel__item-description">
+                  {Math.round(instance.rotationDeg)}°
+                </span>
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => onRotate(instance.id, -90)}
+                  disabled={isBusy}
+                  aria-label={`Rotate ${displayName} counter-clockwise 90 degrees`}
+                >
+                  ⟲ 90°
+                </button>
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => onRotate(instance.id, 90)}
+                  disabled={isBusy}
+                  aria-label={`Rotate ${displayName} clockwise 90 degrees`}
+                >
+                  ⟳ 90°
+                </button>
+                <label className="control-group" htmlFor={`module-rotation-${instance.id}`}>
+                  <span className="control-group__label">Rotate</span>
+                  <input
+                    id={`module-rotation-${instance.id}`}
+                    className="control-group__input"
+                    type="range"
+                    min={0}
+                    max={359}
+                    step={1}
+                    value={Math.round(instance.rotationDeg)}
+                    onChange={(event) =>
+                      onSetRotation(instance.id, Number(event.target.value))
+                    }
+                    disabled={isBusy}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => onAlignToPin(instance.id)}
+                  disabled={isBusy}
+                  aria-label={`Align ${displayName} to nearest pin`}
+                >
+                  Align to pin
+                </button>
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => onRemove(instance.id)}
+                  disabled={isBusy}
+                  aria-label={`Remove ${displayName}`}
+                >
+                  Remove
+                </button>
+              </li>
+            )
+          })}
         </ul>
       )}
     </section>
