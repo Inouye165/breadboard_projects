@@ -390,6 +390,30 @@
 .home-screen__actions {
   display: flex;
   justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.home-screen__section {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.home-screen__section-title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--accent-strong);
+}
+
+.home-screen__section-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 252, 245, 0.7);
+  border: 1px dashed rgba(127, 92, 24, 0.22);
 }
 
 .home-screen__empty {
@@ -529,4 +553,33 @@
   paint-order: stroke;
   stroke: rgba(255, 252, 245, 0.95);
   stroke-width: 3px;
+}
+
+/* Wire editor */
+.wire-editor {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wire-editor__svg .wire-editor__pin {
+  cursor: pointer;
+  fill: rgba(201, 87, 28, 0.95);
+}
+
+.wire-editor__pin--pending-from {
+  fill: rgba(31, 95, 204, 0.95);
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 2px;
+}
+
+.wire-editor__wire {
+  cursor: pointer;
+  pointer-events: stroke;
+}
+
+.wire-editor__wire--pending {
+  stroke-dasharray: 6 4;
+  filter: drop-shadow(0 0 4px rgba(214, 32, 32, 0.5));
 }

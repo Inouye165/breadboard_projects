@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 import type { BreadboardDefinition, ConnectionPoint } from '../lib/breadboardDefinitionModel'
 
@@ -44,12 +44,14 @@ export function PinPointEditor({
 }: PinPointEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [pendingRemovalId, setPendingRemovalId] = useState<string | null>(null)
+  const [trackedDefinitionId, setTrackedDefinitionId] = useState(definition.id)
   const safeWidth = imageWidth > 0 ? imageWidth : 1
   const safeHeight = imageHeight > 0 ? imageHeight : 1
 
-  useEffect(() => {
+  if (trackedDefinitionId !== definition.id) {
+    setTrackedDefinitionId(definition.id)
     setPendingRemovalId(null)
-  }, [definition.id])
+  }
 
   function getStageCoordinates(event: React.PointerEvent<SVGSVGElement>) {
     const svg = svgRef.current

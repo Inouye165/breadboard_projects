@@ -12,13 +12,21 @@ import {
   readBreadboardDefinition,
   saveBreadboardDefinition,
 } from './server/breadboardDefinitionStore'
+import {
+  deleteBreadboardProject,
+  listBreadboardProjects,
+  readBreadboardProject,
+  saveBreadboardProject,
+} from './server/breadboardProjectStore'
 
 const WORKSPACE_STORAGE_DIR = path.resolve(__dirname, '.breadboard-local')
 const BREADBOARD_DEFINITIONS_DIR = path.join(WORKSPACE_STORAGE_DIR, 'definitions')
+const BREADBOARD_PROJECTS_DIR = path.join(WORKSPACE_STORAGE_DIR, 'projects')
 const WORKSPACE_IMAGE_DIR = path.join(WORKSPACE_STORAGE_DIR, 'images')
 const WORKSPACE_METADATA_FILE = path.join(WORKSPACE_STORAGE_DIR, 'workspace.json')
 const WORKSPACE_IMAGE_BASE_PATH = '/__breadboard_local__/images/'
 const PART_DEFINITIONS_ENDPOINT = '/api/part-definitions'
+const PROJECTS_ENDPOINT = '/api/projects'
 
 type AlignmentPoint = {
   x: number
@@ -134,6 +142,26 @@ function getDefinitionIdFromRequest(url: string) {
   const [definitionId] = remainder.slice(1).split('/', 1)
 
   return definitionId ? decodeURIComponent(definitionId) : null
+}
+
+function getProjectIdFromRequest(url: string) {
+  if (!url.startsWith(PROJECTS_ENDPOINT)) {
+    return null
+  }
+
+  const remainder = url.slice(PROJECTS_ENDPOINT.length)
+
+  if (remainder === '' || remainder === '/') {
+    return ''
+  }
+
+  if (!remainder.startsWith('/')) {
+    return null
+  }
+
+  const [projectId] = remainder.slice(1).split('/', 1)
+
+  return projectId ? decodeURIComponent(projectId) : null
 }
 
 async function handleWorkspaceRequest(
@@ -304,12 +332,98 @@ async function handlePartDefinitionRequest(
   return false
 }
 
+async function handleProjectRequest(
+  request: MiddlewareRequest,
+  response: MiddlewareResponse,
+) {
+  const requestUrl = request.url ?? ''
+  const projectId = getProjectIdFromRequest(requestUrl)
+
+  if (projectId === null) {
+    return false
+  }
+
+  if (request.method === 'GET' && projectId === '') {
+    sendJson(response, 200, { projects: await listBreadboardProjects(BREADBOARD_PROJECTS_DIR) })
+    return true
+  }
+
+  if (request.method === 'GET' && projectId) {
+    const project = await readBreadboardProject(BREADBOARD_PROJECTS_DIR, projectId)
+
+    if (!project) {
+      sendJson(response, 404, { error: 'Project not found.' })
+      return true
+    }
+
+    sendJson(response, 200, { project })
+    return true
+  }
+
+  if (request.method === 'POST' && projectId === '') {
+    try {
+      const project = await saveBreadboardProject(
+        BREADBOARD_PROJECTS_DIR,
+        JSON.parse(await readRequestBody(request)),
+      )
+
+      sendJson(response, 200, { project })
+    } catch {
+      sendJson(response, 400, { error: 'Invalid project payload.' })
+    }
+
+    return true
+  }
+
+  if (request.method === 'PUT' && projectId) {
+    try {
+      const payload = JSON.parse(await readRequestBody(request)) as { id?: string }
+
+      if (payload.id !== projectId) {
+        sendJson(response, 400, { error: 'Project id mismatch.' })
+        return true
+      }
+
+      const project = await saveBreadboardProject(BREADBOARD_PROJECTS_DIR, payload)
+
+      sendJson(response, 200, { project })
+    } catch {
+      sendJson(response, 400, { error: 'Invalid project payload.' })
+    }
+
+    return true
+  }
+
+  if (request.method === 'DELETE' && projectId) {
+    const deleted = await deleteBreadboardProject(BREADBOARD_PROJECTS_DIR, projectId)
+
+    if (!deleted) {
+      sendJson(response, 404, { error: 'Project not found.' })
+      return true
+    }
+
+    sendJson(response, 200, { success: true })
+    return true
+  }
+
+  return false
+}
+
 function createWorkspacePersistenceMiddleware() {
   return (request: MiddlewareRequest, response: MiddlewareResponse, next: NextHandler) => {
     const requestUrl = request.url ?? ''
 
     if (requestUrl.startsWith(PART_DEFINITIONS_ENDPOINT)) {
       void handlePartDefinitionRequest(request, response).then((handled) => {
+        if (!handled) {
+          next()
+        }
+      })
+      return
+    }
+
+    if (requestUrl.startsWith(PROJECTS_ENDPOINT)) {
+      void handleProjectRequest(request, response).then((handled) => {
         if (!handled) {
           next()
         }
