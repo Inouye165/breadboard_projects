@@ -29,6 +29,8 @@ describe('ImageWorkspace', () => {
   it('renders the guide line and manual rotation controls', async () => {
     render(
       <ImageWorkspace
+        currentDefinitionName="Board A"
+        definitionOptions={[]}
         imageName="board.png"
         imagePath="/board.png"
         rotationDegrees={0}
@@ -36,14 +38,19 @@ describe('ImageWorkspace', () => {
         rotationStep={0.25}
         guideLineStep={0.5}
         status="Adjust manually"
+        onCreateDefinition={vi.fn()}
+        onCurrentDefinitionNameChange={vi.fn()}
+        onDefinitionSelected={vi.fn()}
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
+        onImageDimensionsChange={vi.fn()}
         onRotationStepChange={vi.fn()}
         onGuideLineStepChange={vi.fn()}
         onRotateLeft={vi.fn()}
         onRotateRight={vi.fn()}
         onNudgeGuideLine={vi.fn()}
         onResetAlignment={vi.fn()}
+        onSaveDefinition={vi.fn()}
         onSaveAlignment={vi.fn()}
       />,
     )
@@ -61,6 +68,8 @@ describe('ImageWorkspace', () => {
   it('does not render pin or grid overlays', async () => {
     const { container } = render(
       <ImageWorkspace
+        currentDefinitionName="Board A"
+        definitionOptions={[]}
         imageName="board.png"
         imagePath="/board.png"
         rotationDegrees={0}
@@ -68,14 +77,19 @@ describe('ImageWorkspace', () => {
         rotationStep={0.5}
         guideLineStep={0.5}
         status="Adjust manually"
+        onCreateDefinition={vi.fn()}
+        onCurrentDefinitionNameChange={vi.fn()}
+        onDefinitionSelected={vi.fn()}
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
+        onImageDimensionsChange={vi.fn()}
         onRotationStepChange={vi.fn()}
         onGuideLineStepChange={vi.fn()}
         onRotateLeft={vi.fn()}
         onRotateRight={vi.fn()}
         onNudgeGuideLine={vi.fn()}
         onResetAlignment={vi.fn()}
+        onSaveDefinition={vi.fn()}
         onSaveAlignment={vi.fn()}
       />,
     )
@@ -91,6 +105,8 @@ describe('ImageWorkspace', () => {
   it('renders the image stage with width-driven sizing and no fixed crop', async () => {
     render(
       <ImageWorkspace
+        currentDefinitionName="Board A"
+        definitionOptions={[]}
         imageName="board.png"
         imagePath="/board.png"
         rotationDegrees={0}
@@ -98,14 +114,19 @@ describe('ImageWorkspace', () => {
         rotationStep={0.25}
         guideLineStep={0.5}
         status="Saved image loaded"
+        onCreateDefinition={vi.fn()}
+        onCurrentDefinitionNameChange={vi.fn()}
+        onDefinitionSelected={vi.fn()}
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
+        onImageDimensionsChange={vi.fn()}
         onRotationStepChange={vi.fn()}
         onGuideLineStepChange={vi.fn()}
         onRotateLeft={vi.fn()}
         onRotateRight={vi.fn()}
         onNudgeGuideLine={vi.fn()}
         onResetAlignment={vi.fn()}
+        onSaveDefinition={vi.fn()}
         onSaveAlignment={vi.fn()}
       />,
     )
@@ -124,6 +145,8 @@ describe('ImageWorkspace', () => {
 
     render(
       <ImageWorkspace
+        currentDefinitionName="Board A"
+        definitionOptions={[]}
         imageName="board.png"
         imagePath="/board.png"
         rotationDegrees={0}
@@ -131,14 +154,19 @@ describe('ImageWorkspace', () => {
         rotationStep={0.25}
         guideLineStep={0.5}
         status="Saved image loaded"
+        onCreateDefinition={vi.fn()}
+        onCurrentDefinitionNameChange={vi.fn()}
+        onDefinitionSelected={vi.fn()}
         onUploadRequest={vi.fn()}
         onGuideLineChange={vi.fn()}
+        onImageDimensionsChange={vi.fn()}
         onRotationStepChange={vi.fn()}
         onGuideLineStepChange={vi.fn()}
         onRotateLeft={onRotateLeft}
         onRotateRight={onRotateRight}
         onNudgeGuideLine={onNudgeGuideLine}
         onResetAlignment={vi.fn()}
+        onSaveDefinition={vi.fn()}
         onSaveAlignment={vi.fn()}
       />,
     )

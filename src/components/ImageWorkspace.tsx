@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 
 type ImageWorkspaceProps = {
+  currentDefinitionName: string
+  definitionOptions: Array<{ id: string; name: string }>
   imageName?: string
   imagePath?: string
   rotationDegrees: number
@@ -8,8 +10,14 @@ type ImageWorkspaceProps = {
   rotationStep: number
   guideLineStep: number
   isBusy?: boolean
+  isDefinitionBusy?: boolean
+  isDefinitionSaveDisabled?: boolean
   isSaveDisabled?: boolean
   status: string
+  onCreateDefinition: () => void
+  onCurrentDefinitionNameChange: (value: string) => void
+  onDefinitionSelected: (definitionId: string) => void
+  onImageDimensionsChange?: (dimensions: ImageDimensions) => void
   onUploadRequest: () => void
   onGuideLineChange: (value: number) => void
   onRotationStepChange: (value: number) => void
@@ -18,6 +26,7 @@ type ImageWorkspaceProps = {
   onRotateRight: (multiplier?: number) => void
   onNudgeGuideLine: (direction: -1 | 1, multiplier?: number) => void
   onResetAlignment: () => void
+  onSaveDefinition: () => void
   onSaveAlignment: () => void
 }
 
@@ -71,6 +80,8 @@ function getRotatedLayout(width: number, height: number, rotationDegrees: number
 }
 
 export function ImageWorkspace({
+  currentDefinitionName,
+  definitionOptions,
   imageName,
   imagePath,
   rotationDegrees,
@@ -78,8 +89,14 @@ export function ImageWorkspace({
   rotationStep,
   guideLineStep,
   isBusy = false,
+  isDefinitionBusy = false,
+  isDefinitionSaveDisabled = false,
   isSaveDisabled = false,
   status,
+  onCreateDefinition,
+  onCurrentDefinitionNameChange,
+  onDefinitionSelected,
+  onImageDimensionsChange,
   onUploadRequest,
   onGuideLineChange,
   onRotationStepChange,
@@ -88,6 +105,7 @@ export function ImageWorkspace({
   onRotateRight,
   onNudgeGuideLine,
   onResetAlignment,
+  onSaveDefinition,
   onSaveAlignment,
 }: ImageWorkspaceProps) {
   const svgRef = useRef<SVGSVGElement>(null)
@@ -155,11 +173,16 @@ export function ImageWorkspace({
         width: image.naturalWidth || 1,
         height: image.naturalHeight || 1,
       })
+      onImageDimensionsChange?.({
+        width: image.naturalWidth || 1,
+        height: image.naturalHeight || 1,
+      })
     }
 
     image.onerror = () => {
       if (isActive) {
         setImageDimensions({ width: 1, height: 1 })
+        onImageDimensionsChange?.({ width: 1, height: 1 })
       }
     }
 
@@ -168,7 +191,7 @@ export function ImageWorkspace({
     return () => {
       isActive = false
     }
-  }, [imagePath])
+  }, [imagePath, onImageDimensionsChange])
 
   return (
     <section className="image-workspace" aria-label="Image alignment workspace">
@@ -183,6 +206,64 @@ export function ImageWorkspace({
               Replace image
             </button>
           ) : null}
+          <section className="definition-panel" aria-label="Saved definition controls">
+            <div className="alignment-panel__intro">
+              <p className="control-guide__title">Saved definition</p>
+              <p className="control-guide__body">
+                Keep a named definition record for this aligned image. Point editing comes in the next phase.
+              </p>
+            </div>
+            <label className="control-group" htmlFor="current-definition-name">
+              <span className="control-group__label">Current definition name</span>
+              <input
+                id="current-definition-name"
+                className="control-group__input"
+                type="text"
+                value={currentDefinitionName}
+                onChange={(event) => onCurrentDefinitionNameChange(event.target.value)}
+                placeholder="Untitled breadboard definition"
+                disabled={!imagePath || isDefinitionBusy}
+              />
+            </label>
+            <label className="control-group" htmlFor="saved-definition-list">
+              <span className="control-group__label">Load definition list</span>
+              <select
+                id="saved-definition-list"
+                className="control-group__input"
+                defaultValue=""
+                onChange={(event) => {
+                  onDefinitionSelected(event.target.value)
+                  event.currentTarget.value = ''
+                }}
+                disabled={definitionOptions.length === 0 || isDefinitionBusy}
+              >
+                <option value="">Select a saved definition</option>
+                {definitionOptions.map((definition) => (
+                  <option key={definition.id} value={definition.id}>
+                    {definition.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="definition-panel__actions">
+              <button
+                type="button"
+                className="action-button action-button--ghost"
+                onClick={onCreateDefinition}
+                disabled={!imagePath || isDefinitionBusy}
+              >
+                New definition
+              </button>
+              <button
+                type="button"
+                className="action-button"
+                onClick={onSaveDefinition}
+                disabled={isDefinitionSaveDisabled || isDefinitionBusy}
+              >
+                Save definition
+              </button>
+            </div>
+          </section>
           <section className="alignment-panel" aria-label="Alignment controls">
             <div className="alignment-panel__intro">
               <p className="control-guide__title">Live controls</p>

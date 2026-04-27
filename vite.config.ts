@@ -1,14 +1,24 @@
 import { createReadStream } from 'node:fs'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
 
 import react from '@vitejs/plugin-react'
-import { defineConfig, type Connect, type Plugin } from 'vitest/config'
+import { defineConfig, type Plugin } from 'vitest/config'
+
+import {
+  deleteBreadboardDefinition,
+  listBreadboardDefinitions,
+  readBreadboardDefinition,
+  saveBreadboardDefinition,
+} from './server/breadboardDefinitionStore'
 
 const WORKSPACE_STORAGE_DIR = path.resolve(__dirname, '.breadboard-local')
+const BREADBOARD_DEFINITIONS_DIR = path.join(WORKSPACE_STORAGE_DIR, 'definitions')
 const WORKSPACE_IMAGE_DIR = path.join(WORKSPACE_STORAGE_DIR, 'images')
 const WORKSPACE_METADATA_FILE = path.join(WORKSPACE_STORAGE_DIR, 'workspace.json')
 const WORKSPACE_IMAGE_BASE_PATH = '/__breadboard_local__/images/'
+const PART_DEFINITIONS_ENDPOINT = '/api/part-definitions'
 
 type AlignmentPoint = {
   x: number
@@ -28,6 +38,15 @@ type UploadPayload = {
   contentsBase64?: string
   name?: string
 }
+
+type MiddlewareRequest = IncomingMessage & {
+  method?: string
+  url?: string
+}
+
+type MiddlewareResponse = ServerResponse<IncomingMessage>
+
+type NextHandler = () => void
 
 function sanitizeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-')
@@ -91,15 +110,35 @@ async function writeSavedWorkspace(workspace: SavedWorkspace) {
   return workspace
 }
 
-function sendJson(response: Connect.ServerResponse, statusCode: number, payload: unknown) {
+function sendJson(response: MiddlewareResponse, statusCode: number, payload: unknown) {
   response.statusCode = statusCode
   response.setHeader('Content-Type', 'application/json')
   response.end(JSON.stringify(payload))
 }
 
+function getDefinitionIdFromRequest(url: string) {
+  if (!url.startsWith(PART_DEFINITIONS_ENDPOINT)) {
+    return null
+  }
+
+  const remainder = url.slice(PART_DEFINITIONS_ENDPOINT.length)
+
+  if (remainder === '' || remainder === '/') {
+    return ''
+  }
+
+  if (!remainder.startsWith('/')) {
+    return null
+  }
+
+  const [definitionId] = remainder.slice(1).split('/', 1)
+
+  return definitionId ? decodeURIComponent(definitionId) : null
+}
+
 async function handleWorkspaceRequest(
-  request: Connect.IncomingMessage,
-  response: Connect.ServerResponse,
+  request: MiddlewareRequest,
+  response: MiddlewareResponse,
 ) {
   if (request.method === 'GET') {
     sendJson(response, 200, { workspace: await readSavedWorkspace() })
@@ -122,8 +161,8 @@ async function handleWorkspaceRequest(
 }
 
 async function handleWorkspaceImageUpload(
-  request: Connect.IncomingMessage,
-  response: Connect.ServerResponse,
+  request: MiddlewareRequest,
+  response: MiddlewareResponse,
 ) {
   if (request.method !== 'POST') {
     return false
@@ -157,8 +196,8 @@ async function handleWorkspaceImageUpload(
 }
 
 async function handleWorkspaceImageRead(
-  request: Connect.IncomingMessage,
-  response: Connect.ServerResponse,
+  request: MiddlewareRequest,
+  response: MiddlewareResponse,
 ) {
   if (request.method !== 'GET' || !request.url) {
     return false
@@ -188,9 +227,95 @@ async function handleWorkspaceImageRead(
   return true
 }
 
-function createWorkspacePersistenceMiddleware(): Connect.NextHandleFunction {
-  return (request, response, next) => {
+async function handlePartDefinitionRequest(
+  request: MiddlewareRequest,
+  response: MiddlewareResponse,
+) {
+  const requestUrl = request.url ?? ''
+  const definitionId = getDefinitionIdFromRequest(requestUrl)
+
+  if (definitionId === null) {
+    return false
+  }
+
+  if (request.method === 'GET' && definitionId === '') {
+    sendJson(response, 200, { definitions: await listBreadboardDefinitions(BREADBOARD_DEFINITIONS_DIR) })
+    return true
+  }
+
+  if (request.method === 'GET' && definitionId) {
+    const definition = await readBreadboardDefinition(BREADBOARD_DEFINITIONS_DIR, definitionId)
+
+    if (!definition) {
+      sendJson(response, 404, { error: 'Definition not found.' })
+      return true
+    }
+
+    sendJson(response, 200, { definition })
+    return true
+  }
+
+  if (request.method === 'POST' && definitionId === '') {
+    try {
+      const definition = await saveBreadboardDefinition(
+        BREADBOARD_DEFINITIONS_DIR,
+        JSON.parse(await readRequestBody(request)),
+      )
+
+      sendJson(response, 200, { definition })
+    } catch {
+      sendJson(response, 400, { error: 'Invalid definition payload.' })
+    }
+
+    return true
+  }
+
+  if (request.method === 'PUT' && definitionId) {
+    try {
+      const payload = JSON.parse(await readRequestBody(request)) as { id?: string }
+
+      if (payload.id !== definitionId) {
+        sendJson(response, 400, { error: 'Definition id mismatch.' })
+        return true
+      }
+
+      const definition = await saveBreadboardDefinition(BREADBOARD_DEFINITIONS_DIR, payload)
+
+      sendJson(response, 200, { definition })
+    } catch {
+      sendJson(response, 400, { error: 'Invalid definition payload.' })
+    }
+
+    return true
+  }
+
+  if (request.method === 'DELETE' && definitionId) {
+    const deleted = await deleteBreadboardDefinition(BREADBOARD_DEFINITIONS_DIR, definitionId)
+
+    if (!deleted) {
+      sendJson(response, 404, { error: 'Definition not found.' })
+      return true
+    }
+
+    sendJson(response, 200, { success: true })
+    return true
+  }
+
+  return false
+}
+
+function createWorkspacePersistenceMiddleware() {
+  return (request: MiddlewareRequest, response: MiddlewareResponse, next: NextHandler) => {
     const requestUrl = request.url ?? ''
+
+    if (requestUrl.startsWith(PART_DEFINITIONS_ENDPOINT)) {
+      void handlePartDefinitionRequest(request, response).then((handled) => {
+        if (!handled) {
+          next()
+        }
+      })
+      return
+    }
 
     if (requestUrl.startsWith('/api/workspace/image')) {
       void handleWorkspaceImageUpload(request, response).then((handled) => {
@@ -243,5 +368,7 @@ export default defineConfig({
     setupFiles: './src/test/setup.ts',
     css: true,
     globals: true,
+    fileParallelism: false,
+    reporters: 'verbose',
   },
 })

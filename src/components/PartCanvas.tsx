@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { PartDefinition } from '../lib/parts'
+import type { PartDefinition, PartRegionAnchor } from '../lib/parts'
 
 type NormalizedPosition = {
   x: number
@@ -52,7 +52,7 @@ type DragState = {
   pointerId: number
 }
 
-function getOrderedRegionAnchors(anchors: PartDefinition['metadata']['regions'][number]['anchors']) {
+function getOrderedRegionAnchors(anchors: PartRegionAnchor[]) {
   const anchorMap = new Map(anchors.map((anchor) => [anchor.key, anchor]))
 
   return [
@@ -90,9 +90,9 @@ export function PartCanvas({
 }: PartCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const resizeObserverRef = useRef<ResizeObserver | undefined>(undefined)
-  const dragStateRef = useRef<DragState>()
-  const [layout, setLayout] = useState<PartCanvasLayout>()
+  const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const dragStateRef = useRef<DragState | null>(null)
+  const [layout, setLayout] = useState<PartCanvasLayout | null>(null)
   const highlightedPointIdSet = useMemo(() => new Set(highlightedPointIds), [highlightedPointIds])
   const pointMap = useMemo(() => new Map(definition.points.map((point) => [point.id, point])), [definition.points])
 
@@ -248,7 +248,7 @@ export function PartCanvas({
         return
       }
 
-      dragStateRef.current = undefined
+      dragStateRef.current = null
     }
 
     window.addEventListener('pointermove', handleWindowPointerMove)

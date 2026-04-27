@@ -6,8 +6,10 @@ class ResizeObserverMock {
 	disconnect() {}
 }
 
-Object.defineProperty(window, 'ResizeObserver', {
-	writable: true,
-	configurable: true,
-	value: ResizeObserverMock,
-})
+if (typeof window !== 'undefined') {
+	Object.defineProperty(window, 'ResizeObserver', {
+		writable: true,
+		configurable: true,
+		value: ResizeObserverMock,
+	})
+}
