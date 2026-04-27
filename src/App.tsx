@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import './App.css'
+import { ComponentLibrary } from './components/ComponentLibrary'
 import { ImageWorkspace } from './components/ImageWorkspace'
 import { PinPointEditor } from './components/PinPointEditor'
 import { ProjectView } from './components/ProjectView'
@@ -29,6 +30,8 @@ const DEFAULT_GUIDE_LINE_STEP = 0.5
 const DEFAULT_ROTATION_STEP = 0.25
 
 type WizardStep = 'home' | 'align' | 'points' | 'select-breadboard' | 'wire' | 'view-project'
+
+type HomeTab = 'projects' | 'components'
 
 type ImageDimensions = {
   width: number
@@ -85,6 +88,7 @@ function homeStatus(definitionCount: number, projectCount: number) {
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [homeTab, setHomeTab] = useState<HomeTab>('projects')
   const normalizedImagePathsRef = useRef<Set<string>>(new Set())
   const [step, setStep] = useState<WizardStep>('home')
   const [workspace, setWorkspace] = useState<SavedWorkspace | null>(null)
@@ -574,109 +578,120 @@ function App() {
         onChange={handleFileSelection}
       />
       {step === 'home' ? (
-        <section className="home-screen" aria-label="Saved breadboards">
+        <section className="home-screen" aria-label="Breadboard projects home">
           <header className="home-screen__header">
             <p className="image-workspace__eyebrow">Breadboard projects</p>
-            <h1 className="home-screen__title">Your breadboards</h1>
+            <h1 className="home-screen__title">Workbench</h1>
             <p className="image-workspace__status">{status}</p>
           </header>
-          <div className="home-screen__actions">
+          <nav
+            className="home-tabs"
+            role="tablist"
+            aria-label="Workbench sections"
+          >
             <button
               type="button"
-              className="action-button"
-              onClick={handleAddBreadboard}
-              disabled={isBusy}
+              role="tab"
+              aria-selected={homeTab === 'projects'}
+              className={`home-tabs__tab${homeTab === 'projects' ? ' home-tabs__tab--active' : ''}`}
+              onClick={() => setHomeTab('projects')}
             >
-              Add breadboard
+              Projects
             </button>
             <button
               type="button"
-              className="action-button action-button--ghost"
-              onClick={handleStartProject}
-              disabled={isProjectBusy || definitions.length === 0}
-              title={definitions.length === 0 ? 'Add a breadboard first' : undefined}
+              role="tab"
+              aria-selected={homeTab === 'components'}
+              className={`home-tabs__tab${homeTab === 'components' ? ' home-tabs__tab--active' : ''}`}
+              onClick={() => setHomeTab('components')}
             >
-              Start project
+              Components
             </button>
-          </div>
-          {definitions.length === 0 ? (
-            <div className="home-screen__empty">
-              <h2>No breadboards yet.</h2>
-              <p>
-                Click <strong>Add breadboard</strong> to upload an image, align it, and mark each pin
-                hole. The breadboard becomes a single saved object you can wire up later.
-              </p>
-            </div>
-          ) : (
-            <ul className="home-screen__list" aria-label="Saved breadboard list">
-              {definitions.map((definition) => (
-                <li key={definition.id} className="home-screen__card">
-                  <div className="home-screen__card-body">
-                    <h3 className="home-screen__card-title">{definition.name}</h3>
-                    <p className="home-screen__card-meta">
-                      {definition.points.length} pin hole{definition.points.length === 1 ? '' : 's'}
-                      {' \u00b7 '}
-                      {definition.imageName}
-                    </p>
-                  </div>
+          </nav>
+
+          {homeTab === 'projects' ? (
+            <div className="home-tabs__panel">
+              <div className="home-screen__actions">
+                <button
+                  type="button"
+                  className="action-button"
+                  onClick={handleStartProject}
+                  disabled={isProjectBusy || definitions.length === 0}
+                  title={definitions.length === 0 ? 'Add a breadboard in Components first' : undefined}
+                >
+                  Start project
+                </button>
+                {definitions.length === 0 ? (
                   <button
                     type="button"
                     className="action-button action-button--ghost"
-                    onClick={() => void handleOpenDefinition(definition.id)}
-                    disabled={isDefinitionBusy}
+                    onClick={() => setHomeTab('components')}
                   >
-                    Open
+                    Go to Components
                   </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <section className="home-screen__section" aria-label="Saved projects">
-            <h2 className="home-screen__section-title">Projects</h2>
-            {projects.length === 0 ? (
-              <p className="home-screen__section-empty">
-                No projects yet. Click <strong>Start project</strong> to pick a breadboard and add wires.
-              </p>
-            ) : (
-              <ul className="home-screen__list" aria-label="Saved project list">
-                {projects.map((project) => {
-                  const breadboardName =
-                    definitions.find((definition) => definition.id === project.breadboardDefinitionId)?.name ?? 'Unknown breadboard'
+                ) : null}
+              </div>
+              <section className="home-screen__section" aria-label="Saved projects">
+                <h2 className="home-screen__section-title">Projects</h2>
+                {projects.length === 0 ? (
+                  <p className="home-screen__section-empty">
+                    No projects yet. Click <strong>Start project</strong> to pick a breadboard
+                    and add wires.
+                  </p>
+                ) : (
+                  <ul className="home-screen__list" aria-label="Saved project list">
+                    {projects.map((project) => {
+                      const breadboardName =
+                        definitions.find(
+                          (definition) => definition.id === project.breadboardDefinitionId,
+                        )?.name ?? 'Unknown breadboard'
 
-                  return (
-                    <li key={project.id} className="home-screen__card">
-                      <div className="home-screen__card-body">
-                        <h3 className="home-screen__card-title">{project.name}</h3>
-                        <p className="home-screen__card-meta">
-                          {project.wires.length} wire{project.wires.length === 1 ? '' : 's'}
-                          {' \u00b7 '}
-                          {breadboardName}
-                        </p>
-                      </div>
-                      <div className="home-screen__card-actions">
-                        <button
-                          type="button"
-                          className="action-button action-button--ghost"
-                          onClick={() => void handleViewProject(project.id)}
-                          disabled={isProjectBusy}
-                        >
-                          View
-                        </button>
-                        <button
-                          type="button"
-                          className="action-button action-button--ghost"
-                          onClick={() => void handleOpenProject(project.id)}
-                          disabled={isProjectBusy}
-                        >
-                          Open project
-                        </button>
-                      </div>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </section>
+                      return (
+                        <li key={project.id} className="home-screen__card">
+                          <div className="home-screen__card-body">
+                            <h3 className="home-screen__card-title">{project.name}</h3>
+                            <p className="home-screen__card-meta">
+                              {project.wires.length} wire{project.wires.length === 1 ? '' : 's'}
+                              {' \u00b7 '}
+                              {breadboardName}
+                            </p>
+                          </div>
+                          <div className="home-screen__card-actions">
+                            <button
+                              type="button"
+                              className="action-button action-button--ghost"
+                              onClick={() => void handleViewProject(project.id)}
+                              disabled={isProjectBusy}
+                            >
+                              View
+                            </button>
+                            <button
+                              type="button"
+                              className="action-button action-button--ghost"
+                              onClick={() => void handleOpenProject(project.id)}
+                              disabled={isProjectBusy}
+                            >
+                              Open project
+                            </button>
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </section>
+            </div>
+          ) : (
+            <div className="home-tabs__panel">
+              <ComponentLibrary
+                definitions={definitions}
+                isBusy={isBusy}
+                isDefinitionBusy={isDefinitionBusy}
+                onAddBreadboard={handleAddBreadboard}
+                onOpenDefinition={(definitionId) => void handleOpenDefinition(definitionId)}
+              />
+            </div>
+          )}
         </section>
       ) : null}
       {step === 'select-breadboard' ? (

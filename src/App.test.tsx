@@ -232,6 +232,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+async function gotoComponentsAndOpenAdd() {
+  await screen.findByRole('heading', { name: /workbench/i })
+  fireEvent.click(screen.getByRole('tab', { name: /components/i }))
+  return screen.findByRole('button', { name: /add breadboard/i })
+}
+
 async function uploadAndReachAlignStep() {
   const input = await screen.findByLabelText(/upload breadboard image/i)
   const file = new File(['image'], 'fresh-board.png', { type: 'image/png' })
@@ -242,18 +248,24 @@ async function uploadAndReachAlignStep() {
 }
 
 describe('App wizard flow', () => {
-  it('shows the home screen with an Add breadboard button when no breadboards exist', async () => {
+  it('shows the home screen with tabs and surfaces Add breadboard under Components', async () => {
     render(<App />)
 
-    expect(await screen.findByRole('heading', { name: /your breadboards/i })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /add breadboard/i })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: /workbench/i })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /projects/i })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /components/i })).toBeTruthy()
+    fireEvent.click(screen.getByRole('tab', { name: /components/i }))
+    expect(await screen.findByRole('button', { name: /add breadboard/i })).toBeTruthy()
     expect(screen.getByText(/no breadboards yet/i)).toBeTruthy()
   })
 
-  it('lists saved breadboards on the home screen and lets the user open one', async () => {
+  it('lists saved breadboards under Components and lets the user open one', async () => {
     mockedDefinitionApi.listBreadboardDefinitions.mockResolvedValue([savedDefinition])
 
     render(<App />)
+
+    await screen.findByRole('heading', { name: /workbench/i })
+    fireEvent.click(screen.getByRole('tab', { name: /components/i }))
 
     expect(await screen.findByText('Saved board')).toBeTruthy()
 
@@ -271,7 +283,7 @@ describe('App wizard flow', () => {
   it('walks through upload -> align -> add pin holes -> save', async () => {
     render(<App />)
 
-    await screen.findByRole('button', { name: /add breadboard/i })
+    await gotoComponentsAndOpenAdd()
 
     // Step 1: upload
     await uploadAndReachAlignStep()
@@ -328,12 +340,12 @@ describe('App wizard flow', () => {
     expect(savedPayload.points[0].kind).toBe('breadboard-hole')
 
     // Returns to home screen
-    expect(await screen.findByRole('heading', { name: /your breadboards/i })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: /workbench/i })).toBeTruthy()
   })
 
   it('bakes a preview rotation into the image during alignment', async () => {
     render(<App />)
-    await screen.findByRole('button', { name: /add breadboard/i })
+    await gotoComponentsAndOpenAdd()
     await uploadAndReachAlignStep()
 
     fireEvent.change(screen.getByLabelText(/step size/i), { target: { value: '1.25' } })
@@ -347,12 +359,12 @@ describe('App wizard flow', () => {
 
   it('returns to the home screen from the alignment step', async () => {
     render(<App />)
-    await screen.findByRole('button', { name: /add breadboard/i })
+    await gotoComponentsAndOpenAdd()
     await uploadAndReachAlignStep()
 
     fireEvent.click(screen.getByRole('button', { name: /^back$/i }))
 
-    expect(await screen.findByRole('heading', { name: /your breadboards/i })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: /workbench/i })).toBeTruthy()
   })
 
   it('starts a project, picks a breadboard, and saves a wire between two pins', async () => {
