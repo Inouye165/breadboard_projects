@@ -102,4 +102,81 @@ describe('breadboardProjectStore', () => {
     await expect(deleteBreadboardProject(projectsDirectory, 'project-1')).resolves.toBe(true)
     await expect(readBreadboardProject(projectsDirectory, 'project-1')).resolves.toBeNull()
   })
+
+  it('round-trips wire waypoints through persistence', async () => {
+    const projectsDirectory = await createProjectsDirectory()
+    const project: BreadboardProject = {
+      ...createProject(),
+      wires: [
+        {
+          id: 'wire-1',
+          fromPointId: 'point-1',
+          toPointId: 'point-2',
+          color: '#cc3333',
+          waypoints: [
+            { x: 25, y: 80 },
+            { x: 60, y: 120 },
+          ],
+        },
+      ],
+    }
+
+    await saveBreadboardProject(projectsDirectory, project)
+    const loaded = await readBreadboardProject(projectsDirectory, 'project-1')
+
+    expect(loaded?.wires[0].waypoints).toEqual([
+      { x: 25, y: 80 },
+      { x: 60, y: 120 },
+    ])
+  })
+
+  it('round-trips project components through persistence', async () => {
+    const projectsDirectory = await createProjectsDirectory()
+    const project: BreadboardProject = {
+      ...createProject(),
+      components: [
+        { id: 'c-1', kind: 'resistor', label: 'R1', description: '220 ohms' },
+        { id: 'c-2', kind: 'led', label: 'LED1' },
+      ],
+    }
+
+    await saveBreadboardProject(projectsDirectory, project)
+    const loaded = await readBreadboardProject(projectsDirectory, 'project-1')
+
+    expect(loaded?.components).toEqual([
+      { id: 'c-1', kind: 'resistor', label: 'R1', description: '220 ohms' },
+      { id: 'c-2', kind: 'led', label: 'LED1', description: undefined },
+    ])
+  })
+
+  it('rejects components with an unknown kind', async () => {
+    const projectsDirectory = await createProjectsDirectory()
+    const project = {
+      ...createProject(),
+      components: [{ id: 'c-1', kind: 'unicorn', label: 'X' }],
+    }
+
+    await expect(saveBreadboardProject(projectsDirectory, project)).rejects.toThrow(
+      /Invalid component kind/,
+    )
+  })
+
+  it('rejects wires with malformed waypoints', async () => {
+    const projectsDirectory = await createProjectsDirectory()
+    const project = {
+      ...createProject(),
+      wires: [
+        {
+          id: 'wire-1',
+          fromPointId: 'point-1',
+          toPointId: 'point-2',
+          waypoints: [{ x: 'oops', y: 1 }],
+        },
+      ],
+    }
+
+    await expect(saveBreadboardProject(projectsDirectory, project)).rejects.toThrow(
+      /Invalid wire waypoint/,
+    )
+  })
 })

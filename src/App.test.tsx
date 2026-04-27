@@ -397,4 +397,30 @@ describe('App wizard flow', () => {
 
     expect(await screen.findByLabelText(/Wire from A1 to A2/)).toBeTruthy()
   })
+
+  it('opens a read-only project view from the home screen', async () => {
+    mockedDefinitionApi.listBreadboardDefinitions.mockResolvedValue([wireableDefinition])
+    mockedDefinitionApi.loadBreadboardDefinition.mockResolvedValue(wireableDefinition)
+    mockedProjectApi.listBreadboardProjects.mockResolvedValue([
+      {
+        ...savedProject,
+        components: [{ id: 'c-1', kind: 'resistor', label: 'R1', description: '220' }],
+      },
+    ])
+    mockedProjectApi.loadBreadboardProject.mockResolvedValue({
+      ...savedProject,
+      components: [{ id: 'c-1', kind: 'resistor', label: 'R1', description: '220' }],
+    })
+
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /^view$/i }))
+
+    expect(await screen.findByRole('heading', { name: /Saved project/ })).toBeTruthy()
+    expect(screen.getByText(/Project view \(read only\)/i)).toBeTruthy()
+    expect(screen.getByText(/Wires needed \(1\)/)).toBeTruthy()
+    expect(screen.getByText(/Components \(1\)/)).toBeTruthy()
+    expect(screen.getByText('R1 - 220')).toBeTruthy()
+    expect(screen.queryByLabelText(/Project name/)).toBeNull()
+  })
 })

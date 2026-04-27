@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { ImageWorkspace } from './components/ImageWorkspace'
 import { PinPointEditor } from './components/PinPointEditor'
+import { ProjectView } from './components/ProjectView'
 import { WireEditor } from './components/WireEditor'
 import {
   createBreadboardDefinitionRecord,
@@ -27,7 +28,7 @@ const GUIDE_LINE_MAX = 100
 const DEFAULT_GUIDE_LINE_STEP = 0.5
 const DEFAULT_ROTATION_STEP = 0.25
 
-type WizardStep = 'home' | 'align' | 'points' | 'select-breadboard' | 'wire'
+type WizardStep = 'home' | 'align' | 'points' | 'select-breadboard' | 'wire' | 'view-project'
 
 type ImageDimensions = {
   width: number
@@ -306,6 +307,40 @@ function App() {
     } finally {
       setIsProjectBusy(false)
     }
+  }
+
+  async function handleViewProject(projectId: string) {
+    setIsProjectBusy(true)
+
+    try {
+      const project = await loadBreadboardProject(projectId)
+      const breadboard = await loadBreadboardDefinition(project.breadboardDefinitionId)
+
+      setCurrentProject(project)
+      setCurrentProjectBreadboard(breadboard)
+      setStep('view-project')
+      const componentCount = project.components?.length ?? 0
+      setStatus(
+        `Viewing ${project.name}: ${project.wires.length} wire${project.wires.length === 1 ? '' : 's'}, ${componentCount} component${componentCount === 1 ? '' : 's'}.`,
+      )
+    } catch {
+      setStatus('Could not load that project for viewing.')
+    } finally {
+      setIsProjectBusy(false)
+    }
+  }
+
+  function handleSwitchViewToEdit() {
+    if (!currentProject) {
+      return
+    }
+
+    setStep('wire')
+    setStatus(
+      currentProject.wires.length === 0
+        ? `Editing ${currentProject.name}. Click two pin holes to add a wire.`
+        : `Editing ${currentProject.name}. ${currentProject.wires.length} wire${currentProject.wires.length === 1 ? '' : 's'} placed.`,
+    )
   }
 
   async function handleProjectChange(nextProject: BreadboardProject) {
@@ -618,14 +653,24 @@ function App() {
                           {breadboardName}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        className="action-button action-button--ghost"
-                        onClick={() => void handleOpenProject(project.id)}
-                        disabled={isProjectBusy}
-                      >
-                        Open project
-                      </button>
+                      <div className="home-screen__card-actions">
+                        <button
+                          type="button"
+                          className="action-button action-button--ghost"
+                          onClick={() => void handleViewProject(project.id)}
+                          disabled={isProjectBusy}
+                        >
+                          View
+                        </button>
+                        <button
+                          type="button"
+                          className="action-button action-button--ghost"
+                          onClick={() => void handleOpenProject(project.id)}
+                          disabled={isProjectBusy}
+                        >
+                          Open project
+                        </button>
+                      </div>
                     </li>
                   )
                 })}
@@ -744,6 +789,27 @@ function App() {
       {step === 'wire' && (!currentProject || !currentProjectBreadboard) ? (
         <section className="pin-editor" aria-label="Loading project">
           <p className="image-workspace__status">Loading project...</p>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={handleBackToHome}
+          >
+            Back to projects
+          </button>
+        </section>
+      ) : null}
+      {step === 'view-project' && currentProject && currentProjectBreadboard ? (
+        <ProjectView
+          project={currentProject}
+          breadboard={currentProjectBreadboard}
+          status={status}
+          onBack={handleBackToHome}
+          onEdit={handleSwitchViewToEdit}
+        />
+      ) : null}
+      {step === 'view-project' && (!currentProject || !currentProjectBreadboard) ? (
+        <section className="pin-editor" aria-label="Loading project view">
+          <p className="image-workspace__status">Loading project view...</p>
           <button
             type="button"
             className="action-button action-button--ghost"
