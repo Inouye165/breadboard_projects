@@ -1,8 +1,14 @@
+export type WireWaypoint = {
+  x: number
+  y: number
+}
+
 export type Wire = {
   id: string
   fromPointId: string
   toPointId: string
   color?: string
+  waypoints?: WireWaypoint[]
 }
 
 export type BreadboardProject = {
@@ -35,7 +41,10 @@ export function createWireId() {
 }
 
 export function cloneWire(wire: Wire): Wire {
-  return { ...wire }
+  return {
+    ...wire,
+    waypoints: wire.waypoints ? wire.waypoints.map((waypoint) => ({ ...waypoint })) : undefined,
+  }
 }
 
 export function cloneBreadboardProject(project: BreadboardProject): BreadboardProject {

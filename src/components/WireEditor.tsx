@@ -1,7 +1,13 @@
 import { useMemo, useRef, useState } from 'react'
+import type React from 'react'
 
 import type { BreadboardDefinition, ConnectionPoint } from '../lib/breadboardDefinitionModel'
-import { createWireId, type BreadboardProject, type Wire } from '../lib/breadboardProjectModel'
+import {
+  createWireId,
+  type BreadboardProject,
+  type Wire,
+  type WireWaypoint,
+} from '../lib/breadboardProjectModel'
 
 const WIRE_COLORS = ['#cc3333', '#1f8e4d', '#1f5fcc', '#e08a00', '#7a3fc6', '#000000']
 
@@ -14,12 +20,44 @@ type WireEditorProps = {
   onChange: (project: BreadboardProject) => void
 }
 
+type WireVertex = {
+  x: number
+  y: number
+}
+
+type DragState = {
+  wireId: string
+  waypointIndex: number
+  position: WireVertex
+}
+
 function nextWireColor(wires: Wire[]) {
   return WIRE_COLORS[wires.length % WIRE_COLORS.length]
 }
 
 function findPoint(points: ConnectionPoint[], pointId: string) {
   return points.find((point) => point.id === pointId)
+}
+
+function getWireVertices(
+  wire: Wire,
+  fromPoint: ConnectionPoint,
+  toPoint: ConnectionPoint,
+): WireVertex[] {
+  const waypoints = wire.waypoints ?? []
+
+  return [
+    { x: fromPoint.x, y: fromPoint.y },
+    ...waypoints.map((waypoint) => ({ x: waypoint.x, y: waypoint.y })),
+    { x: toPoint.x, y: toPoint.y },
+  ]
+}
+
+function replaceWaypoints(wire: Wire, waypoints: WireWaypoint[]): Wire {
+  return {
+    ...wire,
+    waypoints: waypoints.length === 0 ? undefined : waypoints,
+  }
 }
 
 export function WireEditor({
@@ -34,6 +72,7 @@ export function WireEditor({
   const [pendingFromPointId, setPendingFromPointId] = useState<string | null>(null)
   const [pendingRemovalWireId, setPendingRemovalWireId] = useState<string | null>(null)
   const [trackedProjectId, setTrackedProjectId] = useState(project.id)
+  const [dragState, setDragState] = useState<DragState | null>(null)
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
 
@@ -41,6 +80,7 @@ export function WireEditor({
     setTrackedProjectId(project.id)
     setPendingFromPointId(null)
     setPendingRemovalWireId(null)
+    setDragState(null)
   }
 
   const wireSegments = useMemo(() => {
@@ -57,6 +97,28 @@ export function WireEditor({
       })
       .filter((segment): segment is { wire: Wire; fromPoint: ConnectionPoint; toPoint: ConnectionPoint } => segment !== null)
   }, [project.wires, breadboard.points])
+
+  function getSvgCoordinates(event: { clientX: number; clientY: number }): WireVertex | null {
+    const svg = svgRef.current
+
+    if (!svg) {
+      return null
+    }
+
+    const bounds = svg.getBoundingClientRect()
+
+    if (bounds.width === 0 || bounds.height === 0) {
+      return null
+    }
+
+    const relativeX = (event.clientX - bounds.left) / bounds.width
+    const relativeY = (event.clientY - bounds.top) / bounds.height
+
+    return {
+      x: Math.max(0, Math.min(safeWidth, relativeX * safeWidth)),
+      y: Math.max(0, Math.min(safeHeight, relativeY * safeHeight)),
+    }
+  }
 
   function handlePinClick(pointId: string) {
     setPendingRemovalWireId(null)
@@ -87,6 +149,10 @@ export function WireEditor({
   }
 
   function handleWireClick(wireId: string) {
+    if (dragState) {
+      return
+    }
+
     setPendingFromPointId(null)
 
     if (pendingRemovalWireId === wireId) {
@@ -121,8 +187,120 @@ export function WireEditor({
     })
   }
 
+  function handleInsertWaypoint(wire: Wire, segmentIndex: number, position: WireVertex) {
+    const waypoints = wire.waypoints ? [...wire.waypoints] : []
+    waypoints.splice(segmentIndex, 0, { x: position.x, y: position.y })
+
+    onChange({
+      ...project,
+      wires: project.wires.map((existingWire) =>
+        existingWire.id === wire.id ? replaceWaypoints(existingWire, waypoints) : existingWire,
+      ),
+    })
+    setPendingRemovalWireId(null)
+    setPendingFromPointId(null)
+  }
+
+  function handleWaypointPointerDown(
+    event: React.PointerEvent<SVGCircleElement>,
+    wire: Wire,
+    waypointIndex: number,
+  ) {
+    if (event.button !== 0) {
+      return
+    }
+
+    event.stopPropagation()
+    event.preventDefault()
+    setPendingRemovalWireId(null)
+    setPendingFromPointId(null)
+
+    const waypoint = wire.waypoints?.[waypointIndex]
+
+    if (!waypoint) {
+      return
+    }
+
+    if (typeof event.currentTarget.setPointerCapture === 'function') {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
+    setDragState({
+      wireId: wire.id,
+      waypointIndex,
+      position: { x: waypoint.x, y: waypoint.y },
+    })
+  }
+
+  function handleWaypointPointerMove(event: React.PointerEvent<SVGCircleElement>) {
+    if (!dragState) {
+      return
+    }
+
+    const next = getSvgCoordinates(event)
+
+    if (!next) {
+      return
+    }
+
+    setDragState({ ...dragState, position: next })
+  }
+
+  function handleWaypointPointerUp(event: React.PointerEvent<SVGCircleElement>, wire: Wire) {
+    if (!dragState || dragState.wireId !== wire.id) {
+      return
+    }
+
+    const finalCoordinates = getSvgCoordinates(event) ?? dragState.position
+    const waypoints = wire.waypoints ? [...wire.waypoints] : []
+
+    if (!waypoints[dragState.waypointIndex]) {
+      setDragState(null)
+      return
+    }
+
+    waypoints[dragState.waypointIndex] = {
+      x: finalCoordinates.x,
+      y: finalCoordinates.y,
+    }
+
+    if (
+      typeof event.currentTarget.hasPointerCapture === 'function' &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    setDragState(null)
+    onChange({
+      ...project,
+      wires: project.wires.map((existingWire) =>
+        existingWire.id === wire.id ? replaceWaypoints(existingWire, waypoints) : existingWire,
+      ),
+    })
+  }
+
+  function handleWaypointDoubleClick(
+    event: React.MouseEvent<SVGCircleElement>,
+    wire: Wire,
+    waypointIndex: number,
+  ) {
+    event.stopPropagation()
+
+    const waypoints = wire.waypoints ? [...wire.waypoints] : []
+    waypoints.splice(waypointIndex, 1)
+
+    onChange({
+      ...project,
+      wires: project.wires.map((existingWire) =>
+        existingWire.id === wire.id ? replaceWaypoints(existingWire, waypoints) : existingWire,
+      ),
+    })
+  }
+
   const radius = Math.max(6, Math.min(safeWidth, safeHeight) * 0.008)
   const strokeWidth = Math.max(3, radius * 0.6)
+  const handleRadius = Math.max(5, radius * 0.85)
+  const midpointRadius = Math.max(4, radius * 0.65)
 
   return (
     <section className="wire-editor" aria-label="Wire breadboard">
@@ -168,7 +346,10 @@ export function WireEditor({
         </div>
       </header>
       <p className="pin-editor__hint">
-        Click a pin hole to start a wire, then click another pin hole to finish it. Click an existing wire once to select it, then click again to delete it. Wires are saved automatically.
+        Click a pin hole to start a wire, then click another pin hole to finish it. Click the
+        <strong> + </strong> on a wire segment to add a routing point you can drag, double-click a
+        routing point to remove it, and click an existing wire twice to delete it. Wires save
+        automatically.
       </p>
       <section className="image-workspace__stage-shell">
         <div className="image-stage" aria-label="Breadboard wiring stage">
@@ -187,23 +368,100 @@ export function WireEditor({
             />
             {wireSegments.map(({ wire, fromPoint, toPoint }) => {
               const isPending = pendingRemovalWireId === wire.id
+              const baseVertices = getWireVertices(wire, fromPoint, toPoint)
+              const vertices =
+                dragState && dragState.wireId === wire.id
+                  ? baseVertices.map((vertex, index) =>
+                      index === dragState.waypointIndex + 1 ? dragState.position : vertex,
+                    )
+                  : baseVertices
+              const points = vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ')
 
               return (
-                <line
+                <polyline
                   key={wire.id}
                   className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
-                  x1={fromPoint.x}
-                  y1={fromPoint.y}
-                  x2={toPoint.x}
-                  y2={toPoint.y}
+                  points={points}
+                  fill="none"
                   stroke={wire.color ?? '#222'}
                   strokeWidth={isPending ? strokeWidth * 1.6 : strokeWidth}
                   strokeLinecap="round"
+                  strokeLinejoin="round"
                   role="button"
                   aria-label={`Wire from ${fromPoint.label} to ${toPoint.label}${isPending ? ' (click again to delete)' : ''}`}
                   onClick={() => handleWireClick(wire.id)}
                 />
               )
+            })}
+            {wireSegments.flatMap(({ wire, fromPoint, toPoint }) => {
+              const baseVertices = getWireVertices(wire, fromPoint, toPoint)
+              const vertices =
+                dragState && dragState.wireId === wire.id
+                  ? baseVertices.map((vertex, index) =>
+                      index === dragState.waypointIndex + 1 ? dragState.position : vertex,
+                    )
+                  : baseVertices
+              const waypointHandles = (wire.waypoints ?? []).map((waypoint, waypointIndex) => {
+                const liveVertex = vertices[waypointIndex + 1] ?? waypoint
+                const isDragging =
+                  dragState?.wireId === wire.id && dragState.waypointIndex === waypointIndex
+
+                return (
+                  <circle
+                    key={`waypoint-${wire.id}-${waypointIndex}`}
+                    className={`wire-editor__waypoint${isDragging ? ' wire-editor__waypoint--dragging' : ''}`}
+                    cx={liveVertex.x}
+                    cy={liveVertex.y}
+                    r={handleRadius}
+                    role="button"
+                    aria-label={`Wire ${fromPoint.label} to ${toPoint.label} routing point ${waypointIndex + 1}`}
+                    onPointerDown={(event) => handleWaypointPointerDown(event, wire, waypointIndex)}
+                    onPointerMove={handleWaypointPointerMove}
+                    onPointerUp={(event) => handleWaypointPointerUp(event, wire, waypointIndex)}
+                    onPointerCancel={(event) => handleWaypointPointerUp(event, wire, waypointIndex)}
+                    onDoubleClick={(event) => handleWaypointDoubleClick(event, wire, waypointIndex)}
+                  />
+                )
+              })
+
+              const midpointHandles = vertices.slice(0, -1).map((start, segmentIndex) => {
+                const end = vertices[segmentIndex + 1]
+                const midpoint = {
+                  x: (start.x + end.x) / 2,
+                  y: (start.y + end.y) / 2,
+                }
+
+                return (
+                  <g
+                    key={`midpoint-${wire.id}-${segmentIndex}`}
+                    className="wire-editor__midpoint"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      handleInsertWaypoint(wire, segmentIndex, midpoint)
+                    }}
+                  >
+                    <circle
+                      className="wire-editor__midpoint-bg"
+                      cx={midpoint.x}
+                      cy={midpoint.y}
+                      r={midpointRadius}
+                      role="button"
+                      aria-label={`Add routing point to wire from ${fromPoint.label} to ${toPoint.label} (segment ${segmentIndex + 1})`}
+                    />
+                    <text
+                      className="wire-editor__midpoint-symbol"
+                      x={midpoint.x}
+                      y={midpoint.y + midpointRadius * 0.4}
+                      textAnchor="middle"
+                      fontSize={midpointRadius * 1.6}
+                    >
+                      +
+                    </text>
+                  </g>
+                )
+              })
+
+              return [...midpointHandles, ...waypointHandles]
             })}
             {breadboard.points.map((point) => {
               const isPendingFrom = pendingFromPointId === point.id

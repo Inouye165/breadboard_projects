@@ -26,11 +26,28 @@ function normalizeWire(value: unknown): Wire {
     throw new Error('Invalid wire color.')
   }
 
+  let waypoints: Wire['waypoints']
+
+  if (value.waypoints !== undefined) {
+    if (!Array.isArray(value.waypoints)) {
+      throw new Error('Invalid wire waypoints.')
+    }
+
+    waypoints = value.waypoints.map((waypoint) => {
+      if (!isRecord(waypoint) || typeof waypoint.x !== 'number' || typeof waypoint.y !== 'number') {
+        throw new Error('Invalid wire waypoint.')
+      }
+
+      return { x: waypoint.x, y: waypoint.y }
+    })
+  }
+
   return {
     id: value.id,
     fromPointId: value.fromPointId,
     toPointId: value.toPointId,
     color: value.color as string | undefined,
+    waypoints,
   }
 }
 

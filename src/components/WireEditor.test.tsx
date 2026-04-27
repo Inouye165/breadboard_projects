@@ -33,6 +33,20 @@ function makeProject(wires: BreadboardProject['wires'] = []): BreadboardProject 
 }
 
 describe('WireEditor', () => {
+  beforeEach(() => {
+    Element.prototype.getBoundingClientRect = vi.fn(() => ({
+      left: 0,
+      top: 0,
+      width: 1000,
+      height: 500,
+      right: 1000,
+      bottom: 500,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect))
+  })
+
   it('adds a wire when the user clicks two pin holes', () => {
     const handleChange = vi.fn()
 
@@ -76,7 +90,7 @@ describe('WireEditor', () => {
     expect(handleChange).not.toHaveBeenCalled()
   })
 
-  it('renders existing wires as svg lines positioned by their endpoints', () => {
+  it('renders existing wires as svg polylines through their endpoints', () => {
     render(
       <WireEditor
         project={makeProject([
@@ -90,11 +104,32 @@ describe('WireEditor', () => {
     )
 
     const wire = screen.getByRole('button', { name: /Wire from A1 to A3/ })
-    expect(wire.tagName.toLowerCase()).toBe('line')
-    expect(wire.getAttribute('x1')).toBe('100')
-    expect(wire.getAttribute('y1')).toBe('100')
-    expect(wire.getAttribute('x2')).toBe('300')
-    expect(wire.getAttribute('y2')).toBe('200')
+    expect(wire.tagName.toLowerCase()).toBe('polyline')
+    expect(wire.getAttribute('points')).toBe('100,100 300,200')
+  })
+
+  it('renders the waypoint inline on a rerouted wire', () => {
+    render(
+      <WireEditor
+        project={makeProject([
+          {
+            id: 'wire-1',
+            fromPointId: 'p1',
+            toPointId: 'p3',
+            color: '#cc3333',
+            waypoints: [{ x: 250, y: 50 }],
+          },
+        ])}
+        breadboard={breadboard}
+        status=""
+        onBack={() => {}}
+        onChange={() => {}}
+      />,
+    )
+
+    const wire = screen.getByRole('button', { name: /Wire from A1 to A3/ })
+    expect(wire.getAttribute('points')).toBe('100,100 250,50 300,200')
+    expect(screen.getByRole('button', { name: /routing point 1/ })).toBeTruthy()
   })
 
   it('removes a wire when it is clicked twice', () => {
@@ -140,5 +175,87 @@ describe('WireEditor', () => {
     expect(handleChange).toHaveBeenCalledTimes(1)
     const updated = handleChange.mock.calls[0][0] as BreadboardProject
     expect(updated.name).toBe('Renamed project')
+  })
+
+  it('inserts a routing waypoint when the midpoint handle is clicked', () => {
+    const handleChange = vi.fn()
+
+    render(
+      <WireEditor
+        project={makeProject([
+          { id: 'wire-1', fromPointId: 'p1', toPointId: 'p2', color: '#cc3333' },
+        ])}
+        breadboard={breadboard}
+        status=""
+        onBack={() => {}}
+        onChange={handleChange}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Add routing point to wire from A1 to A2/ }))
+
+    expect(handleChange).toHaveBeenCalledTimes(1)
+    const updated = handleChange.mock.calls[0][0] as BreadboardProject
+    expect(updated.wires[0].waypoints).toEqual([{ x: 150, y: 100 }])
+  })
+
+  it('removes a waypoint when it is double-clicked', () => {
+    const handleChange = vi.fn()
+
+    render(
+      <WireEditor
+        project={makeProject([
+          {
+            id: 'wire-1',
+            fromPointId: 'p1',
+            toPointId: 'p2',
+            color: '#cc3333',
+            waypoints: [{ x: 150, y: 50 }],
+          },
+        ])}
+        breadboard={breadboard}
+        status=""
+        onBack={() => {}}
+        onChange={handleChange}
+      />,
+    )
+
+    fireEvent.doubleClick(screen.getByRole('button', { name: /routing point 1/ }))
+
+    expect(handleChange).toHaveBeenCalledTimes(1)
+    const updated = handleChange.mock.calls[0][0] as BreadboardProject
+    expect(updated.wires[0].waypoints).toBeUndefined()
+  })
+
+  it('persists a dragged waypoint to its dropped position', () => {
+    const handleChange = vi.fn()
+
+    render(
+      <WireEditor
+        project={makeProject([
+          {
+            id: 'wire-1',
+            fromPointId: 'p1',
+            toPointId: 'p2',
+            color: '#cc3333',
+            waypoints: [{ x: 150, y: 100 }],
+          },
+        ])}
+        breadboard={breadboard}
+        status=""
+        onBack={() => {}}
+        onChange={handleChange}
+      />,
+    )
+
+    const handle = screen.getByRole('button', { name: /routing point 1/ })
+
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 150, clientY: 100 })
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 200, clientY: 250 })
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 200, clientY: 250 })
+
+    expect(handleChange).toHaveBeenCalledTimes(1)
+    const updated = handleChange.mock.calls[0][0] as BreadboardProject
+    expect(updated.wires[0].waypoints).toEqual([{ x: 200, y: 250 }])
   })
 })

@@ -583,3 +583,40 @@
   stroke-dasharray: 6 4;
   filter: drop-shadow(0 0 4px rgba(214, 32, 32, 0.5));
 }
+
+.wire-editor__waypoint {
+  cursor: grab;
+  fill: rgba(255, 255, 255, 0.95);
+  stroke: rgba(31, 95, 204, 0.95);
+  stroke-width: 2px;
+  touch-action: none;
+}
+
+.wire-editor__waypoint--dragging {
+  cursor: grabbing;
+  fill: rgba(31, 95, 204, 0.95);
+  stroke: rgba(255, 255, 255, 0.95);
+}
+
+.wire-editor__midpoint {
+  cursor: copy;
+  opacity: 0.55;
+  transition: opacity 120ms ease-in-out;
+}
+
+.wire-editor__midpoint:hover {
+  opacity: 1;
+}
+
+.wire-editor__midpoint-bg {
+  fill: rgba(255, 252, 245, 0.95);
+  stroke: rgba(31, 95, 204, 0.7);
+  stroke-width: 1.5px;
+}
+
+.wire-editor__midpoint-symbol {
+  fill: rgba(31, 95, 204, 0.95);
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+}
