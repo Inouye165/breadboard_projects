@@ -8,6 +8,20 @@ export type ConnectionPoint = {
   snapSource?: 'detected-hole' | 'manual'
 }
 
+/**
+ * Two-point scale calibration stored on the breadboard definition.
+ * x1/y1 and x2/y2 are in image-pixel space (same coordinate system as
+ * ConnectionPoint x/y).  realDistanceMm is the known real-world distance
+ * between those two points in millimetres.
+ */
+export type ScaleCalibration = {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  realDistanceMm: number
+}
+
 export type BreadboardDefinition = {
   id: string
   name: string
@@ -16,6 +30,7 @@ export type BreadboardDefinition = {
   imageWidth: number
   imageHeight: number
   points: ConnectionPoint[]
+  scaleCalibration?: ScaleCalibration
   createdAt: string
   updatedAt: string
 }
@@ -42,6 +57,7 @@ export function cloneBreadboardDefinition(definition: BreadboardDefinition): Bre
   return {
     ...definition,
     points: definition.points.map(cloneConnectionPoint),
+    scaleCalibration: definition.scaleCalibration ? { ...definition.scaleCalibration } : undefined,
   }
 }
 
@@ -58,6 +74,7 @@ export function createEmptyBreadboardDefinition(
     imageWidth: definition.imageWidth ?? 0,
     imageHeight: definition.imageHeight ?? 0,
     points: definition.points?.map(cloneConnectionPoint) ?? [],
+    scaleCalibration: definition.scaleCalibration ? { ...definition.scaleCalibration } : undefined,
     createdAt: definition.createdAt ?? timestamp,
     updatedAt: definition.updatedAt ?? timestamp,
   }

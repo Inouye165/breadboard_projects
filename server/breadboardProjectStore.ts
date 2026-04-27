@@ -6,6 +6,7 @@ import {
   type BreadboardProject,
   type ProjectComponent,
   type ProjectComponentKind,
+  type ProjectModuleInstance,
   type Wire,
 } from '../src/lib/breadboardProjectModel'
 
@@ -86,6 +87,35 @@ function normalizeProjectComponent(value: unknown): ProjectComponent {
   }
 }
 
+function normalizeProjectModuleInstance(value: unknown): ProjectModuleInstance {
+  if (!isRecord(value)) {
+    throw new Error('Invalid module payload.')
+  }
+
+  if (
+    typeof value.id !== 'string' ||
+    typeof value.libraryPartId !== 'string' ||
+    typeof value.centerX !== 'number' ||
+    typeof value.centerY !== 'number' ||
+    typeof value.rotationDeg !== 'number'
+  ) {
+    throw new Error('Invalid module payload.')
+  }
+
+  if (value.viewId !== undefined && typeof value.viewId !== 'string') {
+    throw new Error('Invalid module viewId.')
+  }
+
+  return {
+    id: value.id,
+    libraryPartId: value.libraryPartId,
+    viewId: value.viewId as string | undefined,
+    centerX: value.centerX,
+    centerY: value.centerY,
+    rotationDeg: value.rotationDeg,
+  }
+}
+
 function normalizeBreadboardProject(
   value: unknown,
   existingProject?: BreadboardProject,
@@ -119,12 +149,23 @@ function normalizeBreadboardProject(
     components = value.components.map(normalizeProjectComponent)
   }
 
+  let modules: ProjectModuleInstance[] | undefined
+
+  if (value.modules !== undefined) {
+    if (!Array.isArray(value.modules)) {
+      throw new Error('Invalid project modules.')
+    }
+
+    modules = value.modules.map(normalizeProjectModuleInstance)
+  }
+
   return {
     id: value.id,
     name: value.name,
     breadboardDefinitionId: value.breadboardDefinitionId,
     wires: value.wires.map(normalizeWire),
     components,
+    modules,
     createdAt,
     updatedAt,
   }

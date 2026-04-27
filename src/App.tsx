@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { ComponentLibrary } from './components/ComponentLibrary'
 import { ImageWorkspace } from './components/ImageWorkspace'
+import { ModuleWorkspace } from './components/ModuleWorkspace'
 import { PinPointEditor } from './components/PinPointEditor'
 import { ProjectView } from './components/ProjectView'
 import { WireEditor } from './components/WireEditor'
@@ -23,15 +24,29 @@ import { createEmptyBreadboardProject, type BreadboardProject } from './lib/brea
 import { createDefaultAlignment, type SavedWorkspace } from './lib/imageAlignment'
 import { ensureLandscapeFile, rotateImageFile } from './lib/imageOrientation'
 import { loadSavedWorkspace, saveWorkspace, uploadWorkspaceImage } from './lib/imageWorkspaceApi'
+import {
+  createLibraryPartRecord,
+  listLibraryParts,
+  loadLibraryPart,
+  updateLibraryPartRecord,
+} from './lib/partLibraryApi'
+import { createEmptyLibraryPart, type LibraryPartDefinition } from './lib/partLibraryModel'
 
 const GUIDE_LINE_MIN = 0
 const GUIDE_LINE_MAX = 100
 const DEFAULT_GUIDE_LINE_STEP = 0.5
 const DEFAULT_ROTATION_STEP = 0.25
 
-type WizardStep = 'home' | 'align' | 'points' | 'select-breadboard' | 'wire' | 'view-project'
+type WizardStep =
+  | 'home'
+  | 'align'
+  | 'points'
+  | 'select-breadboard'
+  | 'wire'
+  | 'view-project'
+  | 'edit-library-part'
 
-type HomeTab = 'projects' | 'components'
+type HomeTab = 'projects' | 'components' | 'library-parts'
 
 type ImageDimensions = {
   width: number
@@ -62,6 +77,15 @@ function mergeProjectLibrary(
   const remainingProjects = projects.filter((project) => project.id !== nextProject.id)
 
   return [nextProject, ...remainingProjects].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+}
+
+function mergeLibraryPartLibrary(
+  parts: LibraryPartDefinition[],
+  nextPart: LibraryPartDefinition,
+) {
+  const remaining = parts.filter((part) => part.id !== nextPart.id)
+
+  return [nextPart, ...remaining].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }
 
 function createDefinitionDraft(
@@ -98,6 +122,9 @@ function App() {
   const [currentProject, setCurrentProject] = useState<BreadboardProject | null>(null)
   const [currentProjectBreadboard, setCurrentProjectBreadboard] = useState<BreadboardDefinition | null>(null)
   const [isProjectBusy, setIsProjectBusy] = useState(false)
+  const [libraryParts, setLibraryParts] = useState<LibraryPartDefinition[]>([])
+  const [currentLibraryPart, setCurrentLibraryPart] = useState<LibraryPartDefinition | null>(null)
+  const [isLibraryPartBusy, setIsLibraryPartBusy] = useState(false)
   const [draftAlignment, setDraftAlignment] = useState(createDefaultAlignment())
   const [workspaceImageDimensions, setWorkspaceImageDimensions] = useState<ImageDimensions | null>(null)
   const [guideLinePercent, setGuideLinePercent] = useState(25)
@@ -113,9 +140,10 @@ function App() {
 
     void (async () => {
       try {
-        const [savedDefinitions, savedProjects] = await Promise.all([
+        const [savedDefinitions, savedProjects, savedLibraryParts] = await Promise.all([
           listBreadboardDefinitions(),
           listBreadboardProjects().catch(() => [] as BreadboardProject[]),
+          listLibraryParts().catch(() => [] as LibraryPartDefinition[]),
         ])
 
         if (!isActive) {
@@ -124,6 +152,7 @@ function App() {
 
         setDefinitions(savedDefinitions)
         setProjects(savedProjects)
+        setLibraryParts(savedLibraryParts)
         setStatus(homeStatus(savedDefinitions.length, savedProjects.length))
       } catch {
         if (isActive) {
@@ -257,7 +286,59 @@ function App() {
     setStep('home')
     setCurrentProject(null)
     setCurrentProjectBreadboard(null)
+    setCurrentLibraryPart(null)
     setStatus(homeStatus(definitions.length, projects.length))
+  }
+
+  function handleNewLibraryPart() {
+    const newPart = createEmptyLibraryPart({ name: 'New module' })
+    setCurrentLibraryPart(newPart)
+    setStep('edit-library-part')
+    setStatus('New module. Upload a top image, calibrate corners, then place pins.')
+  }
+
+  async function handleOpenLibraryPart(partId: string) {
+    setIsLibraryPartBusy(true)
+    try {
+      const part = await loadLibraryPart(partId)
+      setCurrentLibraryPart(part)
+      setStep('edit-library-part')
+      setStatus(`Editing ${part.name}.`)
+    } catch {
+      setStatus('Could not load that library part.')
+    } finally {
+      setIsLibraryPartBusy(false)
+    }
+  }
+
+  function handleLibraryPartChange(nextPart: LibraryPartDefinition) {
+    setCurrentLibraryPart(nextPart)
+  }
+
+  async function handleSaveLibraryPart() {
+    if (!currentLibraryPart) {
+      return
+    }
+
+    setIsLibraryPartBusy(true)
+    try {
+      const partToSave: LibraryPartDefinition = {
+        ...currentLibraryPart,
+        name: currentLibraryPart.name.trim() || 'Untitled part',
+      }
+      const isExisting = libraryParts.some((part) => part.id === partToSave.id)
+      const saved = isExisting
+        ? await updateLibraryPartRecord(partToSave)
+        : await createLibraryPartRecord(partToSave)
+
+      setLibraryParts((existing) => mergeLibraryPartLibrary(existing, saved))
+      setCurrentLibraryPart(saved)
+      setStatus(`Saved library part: ${saved.name}.`)
+    } catch {
+      setStatus('Could not save the library part.')
+    } finally {
+      setIsLibraryPartBusy(false)
+    }
   }
 
   function handleStartProject() {
@@ -607,6 +688,15 @@ function App() {
             >
               Components
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={homeTab === 'library-parts'}
+              className={`home-tabs__tab${homeTab === 'library-parts' ? ' home-tabs__tab--active' : ''}`}
+              onClick={() => setHomeTab('library-parts')}
+            >
+              Modules &amp; sensors
+            </button>
           </nav>
 
           {homeTab === 'projects' ? (
@@ -681,7 +771,7 @@ function App() {
                 )}
               </section>
             </div>
-          ) : (
+          ) : homeTab === 'components' ? (
             <div className="home-tabs__panel">
               <ComponentLibrary
                 definitions={definitions}
@@ -690,6 +780,56 @@ function App() {
                 onAddBreadboard={handleAddBreadboard}
                 onOpenDefinition={(definitionId) => void handleOpenDefinition(definitionId)}
               />
+            </div>
+          ) : (
+            <div className="home-tabs__panel">
+              <section className="home-screen__section" aria-label="Modules and sensors">
+                <div className="home-screen__actions">
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={handleNewLibraryPart}
+                    disabled={isLibraryPartBusy}
+                  >
+                    Add module/sensor
+                  </button>
+                </div>
+                <h2 className="home-screen__section-title">Calibrated modules &amp; sensors</h2>
+                <p className="home-screen__section-empty">
+                  Real-world sensors, breakout boards, modules, displays, and microcontrollers calibrated
+                  in millimeters so they snap to a breadboard at true physical scale.
+                </p>
+                {libraryParts.length === 0 ? (
+                  <p className="home-screen__section-empty">
+                    No modules yet. Click <strong>Add module/sensor</strong> to add one.
+                  </p>
+                ) : (
+                  <ul className="home-screen__list" aria-label="Saved modules and sensors">
+                    {libraryParts.map((part) => (
+                      <li key={part.id} className="home-screen__card">
+                        <div className="home-screen__card-body">
+                          <h3 className="home-screen__card-title">{part.name}</h3>
+                          <p className="home-screen__card-meta">
+                            {part.category}
+                            {' \u00b7 '}
+                            {part.logicalPins.length} pin{part.logicalPins.length === 1 ? '' : 's'}
+                            {' \u00b7 '}
+                            {part.physicalPoints.length} point{part.physicalPoints.length === 1 ? '' : 's'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="action-button action-button--ghost"
+                          onClick={() => void handleOpenLibraryPart(part.id)}
+                          disabled={isLibraryPartBusy}
+                        >
+                          Open
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
             </div>
           )}
         </section>
@@ -795,6 +935,7 @@ function App() {
         <WireEditor
           project={currentProject}
           breadboard={currentProjectBreadboard}
+          libraryParts={libraryParts}
           isBusy={isProjectBusy}
           status={status}
           onBack={handleBackToHome}
@@ -817,6 +958,7 @@ function App() {
         <ProjectView
           project={currentProject}
           breadboard={currentProjectBreadboard}
+          libraryParts={libraryParts}
           status={status}
           onBack={handleBackToHome}
           onEdit={handleSwitchViewToEdit}
@@ -833,6 +975,16 @@ function App() {
             Back to projects
           </button>
         </section>
+      ) : null}
+      {step === 'edit-library-part' && currentLibraryPart ? (
+        <ModuleWorkspace
+          part={currentLibraryPart}
+          isBusy={isLibraryPartBusy}
+          status={status}
+          onBack={handleBackToHome}
+          onChange={handleLibraryPartChange}
+          onSave={() => void handleSaveLibraryPart()}
+        />
       ) : null}
     </main>
   )
