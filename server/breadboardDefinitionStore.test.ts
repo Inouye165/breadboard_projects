@@ -117,4 +117,57 @@ describe('breadboardDefinitionStore', () => {
     await expect(deleteBreadboardDefinition(definitionsDirectory, 'definition-1')).resolves.toBe(true)
     await expect(readBreadboardDefinition(definitionsDirectory, 'definition-1')).resolves.toBeNull()
   })
+
+  it('round-trips grid-fill metadata, regions, and axis groups through persistence', async () => {
+    const definitionsDirectory = await createDefinitionsDirectory()
+    const gridDefinition: BreadboardDefinition = {
+      ...createDefinition(),
+      points: [
+        {
+          id: 'gp-1',
+          label: '1',
+          x: 10,
+          y: 10,
+          kind: 'breadboard-hole',
+          snapSource: 'grid-fill',
+          regionId: 'region-1',
+          columnId: 'col-1',
+        },
+        {
+          id: 'gp-2',
+          label: '2',
+          x: 20,
+          y: 10,
+          kind: 'breadboard-hole',
+          snapSource: 'grid-fill',
+          regionId: 'region-1',
+          columnId: 'col-2',
+        },
+      ],
+      regions: [
+        {
+          id: 'region-1',
+          name: 'Grid 1',
+          kind: 'terminal-strip',
+          pointIds: ['gp-1', 'gp-2'],
+          rows: [],
+          columns: [
+            { id: 'col-1', label: '1', pointIds: ['gp-1'] },
+            { id: 'col-2', label: '2', pointIds: ['gp-2'] },
+          ],
+        },
+      ],
+    }
+
+    const saved = await saveBreadboardDefinition(definitionsDirectory, gridDefinition)
+    expect(saved.points[0].snapSource).toBe('grid-fill')
+    expect(saved.points[0].regionId).toBe('region-1')
+    expect(saved.points[0].columnId).toBe('col-1')
+    expect(saved.regions).toHaveLength(1)
+    expect(saved.regions?.[0].columns).toHaveLength(2)
+
+    const reloaded = await readBreadboardDefinition(definitionsDirectory, gridDefinition.id)
+    expect(reloaded?.regions?.[0].columns[1].pointIds).toEqual(['gp-2'])
+    expect(reloaded?.points[1].columnId).toBe('col-2')
+  })
 })

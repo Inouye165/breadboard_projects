@@ -1,7 +1,14 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import type { BreadboardDefinition, ConnectionPoint, ScaleCalibration } from '../src/lib/breadboardDefinitionModel'
+import type {
+  BreadboardDefinition,
+  ConnectionPoint,
+  DefinitionAxisGroup,
+  DefinitionRegion,
+  DefinitionRegionKind,
+  ScaleCalibration,
+} from '../src/lib/breadboardDefinitionModel'
 
 type JsonObject = Record<string, unknown>
 
@@ -14,7 +21,51 @@ function isConnectionPointKind(value: unknown): value is ConnectionPoint['kind']
 }
 
 function isSnapSource(value: unknown): value is NonNullable<ConnectionPoint['snapSource']> {
-  return value === 'detected-hole' || value === 'manual'
+  return value === 'detected-hole' || value === 'manual' || value === 'grid-fill'
+}
+
+function isDefinitionRegionKind(value: unknown): value is DefinitionRegionKind {
+  return value === 'terminal-strip' || value === 'power-rail' || value === 'custom-grid'
+}
+
+function normalizeAxisGroup(value: unknown): DefinitionAxisGroup {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    typeof value.label !== 'string' ||
+    !Array.isArray(value.pointIds) ||
+    value.pointIds.some((id) => typeof id !== 'string')
+  ) {
+    throw new Error('Invalid axis group payload.')
+  }
+  return {
+    id: value.id,
+    label: value.label,
+    pointIds: value.pointIds.map((id) => id as string),
+  }
+}
+
+function normalizeDefinitionRegion(value: unknown): DefinitionRegion {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== 'string' ||
+    typeof value.name !== 'string' ||
+    !isDefinitionRegionKind(value.kind) ||
+    !Array.isArray(value.pointIds) ||
+    value.pointIds.some((id) => typeof id !== 'string') ||
+    !Array.isArray(value.rows) ||
+    !Array.isArray(value.columns)
+  ) {
+    throw new Error('Invalid region payload.')
+  }
+  return {
+    id: value.id,
+    name: value.name,
+    kind: value.kind,
+    pointIds: value.pointIds.map((id) => id as string),
+    rows: value.rows.map(normalizeAxisGroup),
+    columns: value.columns.map(normalizeAxisGroup),
+  }
 }
 
 function normalizeConnectionPoint(value: unknown): ConnectionPoint {
@@ -48,6 +99,9 @@ function normalizeConnectionPoint(value: unknown): ConnectionPoint {
     kind: value.kind,
     confidence: value.confidence,
     snapSource: value.snapSource,
+    regionId: typeof value.regionId === 'string' ? value.regionId : undefined,
+    rowId: typeof value.rowId === 'string' ? value.rowId : undefined,
+    columnId: typeof value.columnId === 'string' ? value.columnId : undefined,
   }
 }
 
@@ -107,6 +161,9 @@ function normalizeBreadboardDefinition(
     imageHeight: value.imageHeight,
     points: value.points.map(normalizeConnectionPoint),
     scaleCalibration: normalizeScaleCalibration(value.scaleCalibration),
+    regions: Array.isArray(value.regions)
+      ? value.regions.map(normalizeDefinitionRegion)
+      : undefined,
     createdAt,
     updatedAt,
   }

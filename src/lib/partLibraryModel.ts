@@ -106,6 +106,11 @@ export type PhysicalPoint = {
   throughHole?: boolean
   diameterMm?: number
   notes?: string
+  /**
+   * Optional rail / net id. Points sharing the same `netId` are considered
+   * electrically connected (used by the grid-fill tool's row/column linking).
+   */
+  netId?: string
 }
 
 export type PartResource = {
@@ -171,6 +176,10 @@ export function createLogicalPinId() {
 
 export function createPhysicalPointId() {
   return createId('physical-point')
+}
+
+export function createNetId() {
+  return createId('net')
 }
 
 export function createImageViewId() {

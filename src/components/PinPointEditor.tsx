@@ -1,12 +1,28 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 
-import type { BreadboardDefinition, ConnectionPoint, ScaleCalibration } from '../lib/breadboardDefinitionModel'
+import {
+  createAxisGroupId,
+  createRegionId,
+  type BreadboardDefinition,
+  type ConnectionPoint,
+  type DefinitionAxisGroup,
+  type DefinitionRegion,
+  type DefinitionRegionKind,
+  type ScaleCalibration,
+} from '../lib/breadboardDefinitionModel'
+import { dedupAgainstExisting, generatePinGrid, type GridPoint } from '../lib/pinGrid'
 
 type CalibrationStep =
   | { kind: 'idle' }
   | { kind: 'awaiting-first' }
   | { kind: 'awaiting-second'; x1: number; y1: number }
   | { kind: 'awaiting-distance'; x1: number; y1: number; x2: number; y2: number }
+
+type GridStep =
+  | { kind: 'idle' }
+  | { kind: 'awaiting-first' }
+  | { kind: 'awaiting-second'; corner1: { x: number; y: number } }
+  | { kind: 'configure'; corner1: { x: number; y: number }; corner2: { x: number; y: number } }
 
 type PinPointEditorProps = {
   definition: BreadboardDefinition
@@ -37,6 +53,32 @@ function nextPointLabel(points: ConnectionPoint[]) {
   return String(nextNumber)
 }
 
+function nextRegionName(definition: BreadboardDefinition) {
+  const count = (definition.regions?.length ?? 0) + 1
+  return `Grid ${count}`
+}
+
+function inferRegionKind(
+  rows: number,
+  cols: number,
+  linkRows: boolean,
+  linkCols: boolean,
+): DefinitionRegionKind {
+  // 1xN or 2xN with one axis linked is a classic power rail.
+  if (linkCols && !linkRows && rows === 2) return 'power-rail'
+  if (linkRows && !linkCols && cols === 2) return 'power-rail'
+  if (linkCols && !linkRows) return 'terminal-strip'
+  return 'custom-grid'
+}
+
+function rowLabel(rowIndex: number) {
+  // A, B, ... Z, AA, AB ... (sufficient for typical breadboards).
+  if (rowIndex < 26) return String.fromCharCode(65 + rowIndex)
+  const high = Math.floor(rowIndex / 26) - 1
+  const low = rowIndex % 26
+  return `${String.fromCharCode(65 + high)}${String.fromCharCode(65 + low)}`
+}
+
 export function PinPointEditor({
   definition,
   imagePath,
@@ -54,6 +96,12 @@ export function PinPointEditor({
   const [calibrationStep, setCalibrationStep] = useState<CalibrationStep>({ kind: 'idle' })
   const [calibrationDistance, setCalibrationDistance] = useState('')
   const [calibrationUnit, setCalibrationUnit] = useState<'mm' | 'in'>('in')
+  const [gridStep, setGridStep] = useState<GridStep>({ kind: 'idle' })
+  const [gridRows, setGridRows] = useState(5)
+  const [gridCols, setGridCols] = useState(63)
+  const [gridLinkRows, setGridLinkRows] = useState(false)
+  const [gridLinkCols, setGridLinkCols] = useState(true)
+  const [showPinLabels, setShowPinLabels] = useState(false)
   const safeWidth = imageWidth > 0 ? imageWidth : 1
   const safeHeight = imageHeight > 0 ? imageHeight : 1
 
@@ -61,7 +109,18 @@ export function PinPointEditor({
     setTrackedDefinitionId(definition.id)
     setPendingRemovalId(null)
     setCalibrationStep({ kind: 'idle' })
+    setGridStep({ kind: 'idle' })
   }
+
+  const gridPreview = useMemo(() => {
+    if (gridStep.kind !== 'configure') return null
+    return generatePinGrid({
+      corner1: gridStep.corner1,
+      corner2: gridStep.corner2,
+      rows: gridRows,
+      cols: gridCols,
+    })
+  }, [gridStep, gridRows, gridCols])
 
   function getStageCoordinates(event: React.PointerEvent<SVGSVGElement>) {
     const svg = svgRef.current
@@ -124,6 +183,27 @@ export function PinPointEditor({
     if (calibrationStep.kind === 'awaiting-distance') {
       // Re-click during distance entry restarts point selection.
       setCalibrationStep({ kind: 'awaiting-first' })
+      return
+    }
+
+    // Grid-fill mode intercepts clicks to capture two corners.
+    if (gridStep.kind === 'awaiting-first') {
+      setGridStep({ kind: 'awaiting-second', corner1: coordinates })
+      return
+    }
+
+    if (gridStep.kind === 'awaiting-second') {
+      setGridStep({
+        kind: 'configure',
+        corner1: gridStep.corner1,
+        corner2: coordinates,
+      })
+      return
+    }
+
+    if (gridStep.kind === 'configure') {
+      // Re-click during configuration restarts corner selection.
+      setGridStep({ kind: 'awaiting-first' })
       return
     }
 
@@ -195,7 +275,115 @@ export function PinPointEditor({
     onChange({
       ...definition,
       points: [],
+      regions: definition.regions && definition.regions.length > 0 ? [] : definition.regions,
     })
+  }
+
+  function startGridFill() {
+    setCalibrationStep({ kind: 'idle' })
+    setGridStep({ kind: 'awaiting-first' })
+  }
+
+  function cancelGridFill() {
+    setGridStep({ kind: 'idle' })
+  }
+
+  function handleApplyGrid() {
+    if (gridStep.kind !== 'configure' || !gridPreview) return
+
+    const pitches = [gridPreview.rowPitch, gridPreview.colPitch].filter((p) => p > 0)
+    const tolerance = pitches.length > 0 ? Math.min(...pitches) / 2 : 0
+
+    const dedup = dedupAgainstExisting(
+      definition.points,
+      gridPreview.points,
+      tolerance,
+      (p) => ({ x: p.x, y: p.y }),
+      (p) => p.id,
+    )
+
+    const regionId = createRegionId()
+    const rowGroups: DefinitionAxisGroup[] = gridLinkRows
+      ? gridPreview.rows.map((_, rowIndex) => ({
+          id: createAxisGroupId(),
+          label: rowLabel(rowIndex),
+          pointIds: [],
+        }))
+      : []
+    const colGroups: DefinitionAxisGroup[] = gridLinkCols
+      ? gridPreview.rows[0].map((_, colIndex) => ({
+          id: createAxisGroupId(),
+          label: String(colIndex + 1),
+          pointIds: [],
+        }))
+      : []
+
+    let labelCursor = Number.parseInt(nextPointLabel(dedup.kept), 10)
+    if (!Number.isFinite(labelCursor) || labelCursor < 1) labelCursor = 1
+
+    const newPoints: ConnectionPoint[] = gridPreview.points.map((gp: GridPoint) => {
+      const id = createPointId()
+      const point: ConnectionPoint = {
+        id,
+        label: String(labelCursor++),
+        x: gp.x,
+        y: gp.y,
+        kind: 'breadboard-hole',
+        snapSource: 'grid-fill',
+      }
+      if (gridLinkRows || gridLinkCols) {
+        point.regionId = regionId
+      }
+      if (gridLinkRows) {
+        point.rowId = rowGroups[gp.rowIndex].id
+        rowGroups[gp.rowIndex].pointIds.push(id)
+      }
+      if (gridLinkCols) {
+        point.columnId = colGroups[gp.colIndex].id
+        colGroups[gp.colIndex].pointIds.push(id)
+      }
+      return point
+    })
+
+    const allPoints = [...dedup.kept, ...newPoints]
+
+    let nextRegions = definition.regions ?? []
+    if (dedup.removedIds.length > 0 && nextRegions.length > 0) {
+      const removed = new Set(dedup.removedIds)
+      nextRegions = nextRegions
+        .map((region) => ({
+          ...region,
+          pointIds: region.pointIds.filter((id) => !removed.has(id)),
+          rows: region.rows.map((g) => ({
+            ...g,
+            pointIds: g.pointIds.filter((id) => !removed.has(id)),
+          })),
+          columns: region.columns.map((g) => ({
+            ...g,
+            pointIds: g.pointIds.filter((id) => !removed.has(id)),
+          })),
+        }))
+        .filter((region) => region.pointIds.length > 0)
+    }
+
+    if (gridLinkRows || gridLinkCols) {
+      const region: DefinitionRegion = {
+        id: regionId,
+        name: nextRegionName(definition),
+        kind: inferRegionKind(gridRows, gridCols, gridLinkRows, gridLinkCols),
+        pointIds: newPoints.map((p) => p.id),
+        rows: rowGroups,
+        columns: colGroups,
+      }
+      nextRegions = [...nextRegions, region]
+    }
+
+    onChange({
+      ...definition,
+      points: allPoints,
+      regions: nextRegions.length > 0 ? nextRegions : definition.regions,
+    })
+    setGridStep({ kind: 'idle' })
   }
 
   function handleNameChange(name: string) {
@@ -260,12 +448,29 @@ export function PinPointEditor({
             </button>
             <button
               type="button"
+              className={`action-button${gridStep.kind !== 'idle' ? '' : ' action-button--ghost'}`}
+              onClick={() => (gridStep.kind === 'idle' ? startGridFill() : cancelGridFill())}
+              disabled={isBusy}
+              aria-pressed={gridStep.kind !== 'idle'}
+            >
+              {gridStep.kind !== 'idle' ? 'Cancel grid' : 'Grid fill'}
+            </button>
+            <button
+              type="button"
               className="action-button"
               onClick={onSaveAndFinish}
               disabled={isBusy}
             >
               Save breadboard
             </button>
+            <label className="pin-editor__toggle">
+              <input
+                type="checkbox"
+                checked={showPinLabels}
+                onChange={(event) => setShowPinLabels(event.target.checked)}
+              />
+              Show pin labels
+            </label>
           </div>
         </div>
       </header>
@@ -276,6 +481,12 @@ export function PinPointEditor({
           ? 'Click the second reference point. (Click the first point again to restart.)'
           : calibrationStep.kind === 'awaiting-distance'
           ? 'Enter the real-world distance between the two points below and click Apply.'
+          : gridStep.kind === 'awaiting-first'
+          ? 'Grid fill: click the first corner of the rectangle to populate.'
+          : gridStep.kind === 'awaiting-second'
+          ? 'Grid fill: click the opposite corner.'
+          : gridStep.kind === 'configure'
+          ? 'Adjust rows, columns, and linking below, then Apply. Click the canvas to re-pick corners.'
           : 'Click the image to drop a pin hole. Click an existing pin once to select it, then click again to remove it. These points will be selectable later when wiring the breadboard.'}
       </p>
       {calibrationStep.kind === 'awaiting-distance' ? (
@@ -320,6 +531,86 @@ export function PinPointEditor({
             onClick={() => setCalibrationStep({ kind: 'awaiting-first' })}
           >
             Re-pick points
+          </button>
+        </div>
+      ) : null}
+      {gridStep.kind === 'configure' ? (
+        <div className="pin-editor__calibration-form" role="group" aria-label="Grid fill options">
+          <label className="control-group">
+            <span className="control-group__label">Rows</span>
+            <input
+              className="control-group__input"
+              type="number"
+              min={1}
+              step={1}
+              value={gridRows}
+              onChange={(event) => {
+                const next = Number.parseInt(event.target.value, 10)
+                setGridRows(Number.isFinite(next) && next >= 1 ? next : 1)
+              }}
+            />
+          </label>
+          <label className="control-group">
+            <span className="control-group__label">Columns</span>
+            <input
+              className="control-group__input"
+              type="number"
+              min={1}
+              step={1}
+              value={gridCols}
+              onChange={(event) => {
+                const next = Number.parseInt(event.target.value, 10)
+                setGridCols(Number.isFinite(next) && next >= 1 ? next : 1)
+              }}
+            />
+          </label>
+          <label className="control-group control-group--inline">
+            <input
+              type="checkbox"
+              checked={gridLinkRows}
+              onChange={(event) => setGridLinkRows(event.target.checked)}
+            />
+            <span>Link rows (rail)</span>
+          </label>
+          <label className="control-group control-group--inline">
+            <input
+              type="checkbox"
+              checked={gridLinkCols}
+              onChange={(event) => setGridLinkCols(event.target.checked)}
+            />
+            <span>Link columns (rail)</span>
+          </label>
+          {gridPreview ? (
+            <p className="pin-editor__hint" aria-live="polite">
+              {gridPreview.points.length} points · row pitch{' '}
+              {gridPreview.rowPitch.toFixed(1)} px · col pitch{' '}
+              {gridPreview.colPitch.toFixed(1)} px
+              {definition.scaleCalibration
+                ? (() => {
+                    const cal = definition.scaleCalibration!
+                    const pxDistance = Math.hypot(cal.x2 - cal.x1, cal.y2 - cal.y1) || 1
+                    const mmPerPx = cal.realDistanceMm / pxDistance
+                    const colMm = gridPreview.colPitch * mmPerPx
+                    const rowMm = gridPreview.rowPitch * mmPerPx
+                    return ` (≈ ${(colMm / 25.4).toFixed(3)} in cols, ${(rowMm / 25.4).toFixed(3)} in rows)`
+                  })()
+                : ''}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className="action-button"
+            onClick={handleApplyGrid}
+            disabled={!gridPreview || gridPreview.points.length === 0}
+          >
+            Apply grid
+          </button>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={() => setGridStep({ kind: 'awaiting-first' })}
+          >
+            Re-pick corners
           </button>
         </div>
       ) : null}
@@ -412,6 +703,41 @@ export function PinPointEditor({
                 ) : null}
               </g>
             ) : null}
+            {/* Grid-fill in-progress overlay */}
+            {gridStep.kind === 'awaiting-second' ? (
+              <circle
+                cx={gridStep.corner1.x}
+                cy={gridStep.corner1.y}
+                r={9}
+                fill="#10b981"
+                fillOpacity={0.85}
+                aria-hidden="true"
+              />
+            ) : null}
+            {gridStep.kind === 'configure' && gridPreview ? (
+              <g className="pin-editor__grid-overlay" aria-hidden="true">
+                <rect
+                  x={Math.min(gridStep.corner1.x, gridStep.corner2.x)}
+                  y={Math.min(gridStep.corner1.y, gridStep.corner2.y)}
+                  width={Math.abs(gridStep.corner2.x - gridStep.corner1.x)}
+                  height={Math.abs(gridStep.corner2.y - gridStep.corner1.y)}
+                  fill="none"
+                  stroke="#10b981"
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                />
+                {gridPreview.points.map((p, i) => (
+                  <circle
+                    key={i}
+                    cx={p.x}
+                    cy={p.y}
+                    r={Math.max(4, Math.min(safeWidth, safeHeight) * 0.006)}
+                    fill="#10b981"
+                    fillOpacity={0.6}
+                  />
+                ))}
+              </g>
+            ) : null}
             {definition.points.map((point) => {
               const isPending = pendingRemovalId === point.id
               const radius = Math.max(6, Math.min(safeWidth, safeHeight) * 0.008)
@@ -430,15 +756,19 @@ export function PinPointEditor({
                       event.stopPropagation()
                       handlePinClick(point.id)
                     }}
-                  />
-                  <text
-                    className="pin-editor__pin-label"
-                    x={point.x}
-                    y={point.y - radius - 4}
-                    textAnchor="middle"
                   >
-                    {point.label}
-                  </text>
+                    {showPinLabels ? null : <title>{point.label}</title>}
+                  </circle>
+                  {showPinLabels ? (
+                    <text
+                      className="pin-editor__pin-label"
+                      x={point.x}
+                      y={point.y - radius - 4}
+                      textAnchor="middle"
+                    >
+                      {point.label}
+                    </text>
+                  ) : null}
                 </g>
               )
             })}
