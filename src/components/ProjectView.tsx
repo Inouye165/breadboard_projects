@@ -8,6 +8,10 @@ import type {
   Wire,
 } from '../lib/breadboardProjectModel'
 import { estimatePixelsPerMm } from '../lib/breadboardScale'
+import {
+  computeAlignedBreadboardPinIds,
+  computeCoveredBreadboardPinIds,
+} from '../lib/modulePinAlignment'
 import type { LibraryPartDefinition } from '../lib/partLibraryModel'
 
 type ProjectViewProps = {
@@ -88,8 +92,17 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
     )
   }, [components])
 
-  const radius = Math.max(6, Math.min(safeWidth, safeHeight) * 0.008)
+  const radius = Math.max(3, Math.min(safeWidth, safeHeight) * 0.004)
+  const alignedRadius = radius * 2
   const strokeWidth = Math.max(3, radius * 0.6)
+  const alignedPinIds = useMemo(
+    () => computeAlignedBreadboardPinIds(modules, libraryPartIndex, breadboard.points, pixelsPerMm),
+    [modules, libraryPartIndex, breadboard.points, pixelsPerMm],
+  )
+  const coveredPinIds = useMemo(
+    () => computeCoveredBreadboardPinIds(modules, libraryPartIndex, breadboard.points, pixelsPerMm),
+    [modules, libraryPartIndex, breadboard.points, pixelsPerMm],
+  )
 
   return (
     <section className="project-view" aria-label="Project view">
@@ -186,16 +199,25 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
                   aria-label={`Wire from ${fromLabel} to ${toLabel}`}
                 />
               ))}
-              {breadboard.points.map((point) => (
-                <circle
-                  key={point.id}
-                  className="pin-editor__pin project-view__pin"
-                  cx={point.x}
-                  cy={point.y}
-                  r={radius}
-                  aria-label={`Pin hole ${point.label}`}
-                />
-              ))}
+              {breadboard.points.map((point) => {
+                const isAligned = alignedPinIds.has(point.id)
+                const isCovered = coveredPinIds.has(point.id)
+                if (isCovered && !isAligned) {
+                  return null
+                }
+                return (
+                  <circle
+                    key={point.id}
+                    className={`pin-editor__pin project-view__pin${isAligned ? ' project-view__pin--aligned' : ''}`}
+                    cx={point.x}
+                    cy={point.y}
+                    r={isAligned ? alignedRadius : radius}
+                    fill={isAligned ? '#facc15' : undefined}
+                    stroke={isAligned ? '#a16207' : undefined}
+                    aria-label={`Pin hole ${point.label}${isAligned ? ' (module pin aligned)' : ''}`}
+                  />
+                )
+              })}
             </svg>
           </div>
         </div>
