@@ -740,7 +740,7 @@ export function PinPointEditor({
             ) : null}
             {definition.points.map((point) => {
               const isPending = pendingRemovalId === point.id
-              const radius = Math.max(6, Math.min(safeWidth, safeHeight) * 0.008)
+              const radius = Math.max(3, Math.min(safeWidth, safeHeight) * 0.004)
 
               return (
                 <g key={point.id} className="pin-editor__pin-group">

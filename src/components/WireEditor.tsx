@@ -16,6 +16,10 @@ import {
 } from '../lib/breadboardProjectModel'
 import { estimatePixelsPerMm } from '../lib/breadboardScale'
 import {
+  computeAlignedBreadboardPinIds,
+  computeCoveredBreadboardPinIds,
+} from '../lib/modulePinAlignment'
+import {
   PART_CATEGORIES,
   type LibraryPartDefinition,
   type PartCategory,
@@ -642,10 +646,32 @@ export function WireEditor({
     })
   }
 
-  const radius = Math.max(6, Math.min(safeWidth, safeHeight) * 0.008)
+  const radius = Math.max(3, Math.min(safeWidth, safeHeight) * 0.004)
+  const alignedRadius = radius * 2
   const strokeWidth = Math.max(3, radius * 0.6)
   const handleRadius = Math.max(5, radius * 0.85)
   const midpointRadius = Math.max(4, radius * 0.65)
+
+  const effectiveModules = useMemo(() => {
+    if (!moduleDragState) {
+      return modules
+    }
+    const dragCenter = moduleDragState.snappedPosition ?? moduleDragState.position
+    return modules.map((instance) =>
+      instance.id === moduleDragState.moduleId
+        ? { ...instance, centerX: dragCenter.x, centerY: dragCenter.y }
+        : instance,
+    )
+  }, [modules, moduleDragState])
+
+  const alignedPinIds = useMemo(
+    () => computeAlignedBreadboardPinIds(effectiveModules, libraryPartIndex, breadboard.points, pixelsPerMm),
+    [effectiveModules, libraryPartIndex, breadboard.points, pixelsPerMm],
+  )
+  const coveredPinIds = useMemo(
+    () => computeCoveredBreadboardPinIds(effectiveModules, libraryPartIndex, breadboard.points, pixelsPerMm),
+    [effectiveModules, libraryPartIndex, breadboard.points, pixelsPerMm],
+  )
 
   return (
     <section className="wire-editor" aria-label="Wire breadboard">
@@ -882,6 +908,12 @@ export function WireEditor({
             {breadboard.points.map((point) => {
               const isPendingFrom = pendingFromPointId === point.id
               const isSnapTarget = moduleDragState?.snapPinId === point.id
+              const isAligned = alignedPinIds.has(point.id)
+              const isCovered = coveredPinIds.has(point.id)
+              if (isCovered && !isAligned && !isPendingFrom && !isSnapTarget) {
+                return null
+              }
+              const pinRadius = isAligned ? alignedRadius : radius
 
               return (
                 <g key={point.id} className="pin-editor__pin-group">
@@ -899,12 +931,14 @@ export function WireEditor({
                   ) : null}
                   <circle
                     data-pin-point-id={point.id}
-                    className={`pin-editor__pin wire-editor__pin${isPendingFrom ? ' wire-editor__pin--pending-from' : ''}`}
+                    className={`pin-editor__pin wire-editor__pin${isPendingFrom ? ' wire-editor__pin--pending-from' : ''}${isAligned ? ' wire-editor__pin--aligned' : ''}`}
                     cx={point.x}
                     cy={point.y}
-                    r={radius}
+                    r={pinRadius}
+                    fill={isAligned ? '#facc15' : undefined}
+                    stroke={isAligned ? '#a16207' : undefined}
                     role="button"
-                    aria-label={`Pin hole ${point.label}${isPendingFrom ? ' (selected as wire start)' : ''}`}
+                    aria-label={`Pin hole ${point.label}${isPendingFrom ? ' (selected as wire start)' : ''}${isAligned ? ' (module pin aligned)' : ''}`}
                     onClick={() => handlePinClick(point.id)}
                   >
                     {showPinLabels ? null : <title>{point.label}</title>}
@@ -913,7 +947,7 @@ export function WireEditor({
                     <text
                       className="pin-editor__pin-label"
                       x={point.x}
-                      y={point.y - radius - 4}
+                      y={point.y - pinRadius - 4}
                       textAnchor="middle"
                     >
                       {point.label}
