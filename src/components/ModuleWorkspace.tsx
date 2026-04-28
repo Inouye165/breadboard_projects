@@ -6,6 +6,7 @@ import {
   PHYSICAL_POINT_KINDS,
   createImageViewId,
   createLogicalPinId,
+  createNetId,
   createPhysicalPointId,
   findImageView,
   generatePinRowMm,
@@ -23,6 +24,7 @@ import {
   type PhysicalPoint,
   type PhysicalPointKind,
 } from '../lib/partLibraryModel'
+import { dedupAgainstExisting, generatePinGrid } from '../lib/pinGrid'
 import { uploadLibraryPartImage } from '../lib/partLibraryApi'
 
 type ModuleWorkspaceProps = {
@@ -34,7 +36,7 @@ type ModuleWorkspaceProps = {
   onBack: () => void
 }
 
-type StageMode = 'calibrate' | 'point' | 'pin-row'
+type StageMode = 'calibrate' | 'point' | 'pin-row' | 'pin-grid'
 
 type CornerKey = 'topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft'
 
@@ -110,6 +112,10 @@ export function ModuleWorkspace({
   const [pendingLogicalPinId, setPendingLogicalPinId] = useState<string>('')
   const [pinRowAnchors, setPinRowAnchors] = useState<MmPoint[]>([])
   const [pinRowCount, setPinRowCount] = useState(8)
+  const [gridRows, setGridRows] = useState(2)
+  const [gridCols, setGridCols] = useState(20)
+  const [gridLinkRows, setGridLinkRows] = useState(false)
+  const [gridLinkCols, setGridLinkCols] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
 
   const effectiveViewId = part.imageViews.find((v) => v.id === activeViewId)?.id ?? part.imageViews[0]?.id ?? ''
@@ -288,6 +294,11 @@ export function ModuleWorkspace({
       const next = [...pinRowAnchors, mm].slice(-2)
       setPinRowAnchors(next)
     }
+
+    if (stageMode === 'pin-grid') {
+      const next = [...pinRowAnchors, mm].slice(-2)
+      setPinRowAnchors(next)
+    }
   }
 
   function handleRemovePoint(pointId: string) {
@@ -312,6 +323,61 @@ export function ModuleWorkspace({
   }
 
   function handleResetPinRow() {
+    setPinRowAnchors([])
+  }
+
+  function handleCommitPinGrid() {
+    if (pinRowAnchors.length < 2 || !activeView) return
+    const grid = generatePinGrid({
+      corner1: { x: pinRowAnchors[0].xMm, y: pinRowAnchors[0].yMm },
+      corner2: { x: pinRowAnchors[1].xMm, y: pinRowAnchors[1].yMm },
+      rows: gridRows,
+      cols: gridCols,
+    })
+
+    const pitches = [grid.rowPitch, grid.colPitch].filter((p) => p > 0)
+    const tolerance = pitches.length > 0 ? Math.min(...pitches) / 2 : 0
+
+    const sameView = part.physicalPoints.filter((p) => p.viewId === activeView.id)
+    const otherViews = part.physicalPoints.filter((p) => p.viewId !== activeView.id)
+    const dedup = dedupAgainstExisting(
+      sameView,
+      grid.points,
+      tolerance,
+      (p) => ({ x: p.xMm, y: p.yMm }),
+      (p) => p.id,
+    )
+
+    const rowNetIds = gridLinkRows ? grid.rows.map(() => createNetId()) : []
+    const colNetIds = gridLinkCols ? grid.rows[0].map(() => createNetId()) : []
+
+    const newPoints: PhysicalPoint[] = grid.points.map((gp) => {
+      // When both axes are linked the row net wins (rare combo); user can
+      // edit afterwards. Most real boards link only one axis.
+      const netId = gridLinkRows
+        ? rowNetIds[gp.rowIndex]
+        : gridLinkCols
+          ? colNetIds[gp.colIndex]
+          : undefined
+      return {
+        id: createPhysicalPointId(),
+        viewId: activeView.id,
+        kind: pendingPointKind,
+        xMm: gp.x,
+        yMm: gp.y,
+        logicalPinId: pendingLogicalPinId || undefined,
+        solderable:
+          pendingPointKind === 'solder-pad' || pendingPointKind === 'header-pin' || undefined,
+        throughHole:
+          pendingPointKind === 'header-pin' || pendingPointKind === 'mount-hole' || undefined,
+        netId,
+      }
+    })
+
+    pushPart({
+      ...part,
+      physicalPoints: [...otherViews, ...dedup.kept, ...newPoints],
+    })
     setPinRowAnchors([])
   }
 
@@ -350,7 +416,9 @@ export function ModuleWorkspace({
       ? cornerStatus
       : stageMode === 'point'
         ? 'Click on the image to add a physical point at that mm position.'
-        : `Pin row: click first pin, then last pin (${pinRowAnchors.length}/2).`
+        : stageMode === 'pin-row'
+          ? `Pin row: click first pin, then last pin (${pinRowAnchors.length}/2).`
+          : `Pin grid: click two opposite corners (${pinRowAnchors.length}/2), then set rows × cols.`
 
   return (
     <section className="library-part-editor module-workspace" aria-label="Module workspace">
@@ -548,6 +616,17 @@ export function ModuleWorkspace({
             >
               3. Pin row helper
             </button>
+            <button
+              type="button"
+              className={`action-button${stageMode === 'pin-grid' ? '' : ' action-button--ghost'}`}
+              onClick={() => {
+                setStageMode('pin-grid')
+                setPinRowAnchors([])
+              }}
+              disabled={!calibration}
+            >
+              4. Pin grid helper
+            </button>
           </div>
 
           {stageMode !== 'calibrate' ? (
@@ -597,6 +676,67 @@ export function ModuleWorkspace({
                   </button>
                   <button type="button" className="action-button action-button--ghost" onClick={handleResetPinRow}>
                     Reset row
+                  </button>
+                </>
+              ) : null}
+              {stageMode === 'pin-grid' ? (
+                <>
+                  <label>
+                    Rows
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={gridRows}
+                      onChange={(event) => {
+                        const next = Number.parseInt(event.target.value, 10)
+                        setGridRows(Number.isFinite(next) && next >= 1 ? next : 1)
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Cols
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={gridCols}
+                      onChange={(event) => {
+                        const next = Number.parseInt(event.target.value, 10)
+                        setGridCols(Number.isFinite(next) && next >= 1 ? next : 1)
+                      }}
+                    />
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={gridLinkRows}
+                      onChange={(event) => setGridLinkRows(event.target.checked)}
+                    />
+                    Link rows
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={gridLinkCols}
+                      onChange={(event) => setGridLinkCols(event.target.checked)}
+                    />
+                    Link cols
+                  </label>
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={handleCommitPinGrid}
+                    disabled={pinRowAnchors.length < 2}
+                  >
+                    Generate grid
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button action-button--ghost"
+                    onClick={handleResetPinRow}
+                  >
+                    Reset corners
                   </button>
                 </>
               ) : null}

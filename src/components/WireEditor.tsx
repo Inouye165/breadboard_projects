@@ -168,6 +168,7 @@ export function WireEditor({
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null)
   const [moduleDragState, setModuleDragState] = useState<ModuleDragState | null>(null)
+  const [showPinLabels, setShowPinLabels] = useState(false)
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
   const pixelsPerMm = useMemo(() => estimatePixelsPerMm(breadboard), [breadboard])
@@ -686,6 +687,14 @@ export function WireEditor({
             >
               Clear all wires
             </button>
+            <label className="pin-editor__toggle">
+              <input
+                type="checkbox"
+                checked={showPinLabels}
+                onChange={(event) => setShowPinLabels(event.target.checked)}
+              />
+              Show pin labels
+            </label>
           </div>
         </div>
       </header>
@@ -897,15 +906,19 @@ export function WireEditor({
                     role="button"
                     aria-label={`Pin hole ${point.label}${isPendingFrom ? ' (selected as wire start)' : ''}`}
                     onClick={() => handlePinClick(point.id)}
-                  />
-                  <text
-                    className="pin-editor__pin-label"
-                    x={point.x}
-                    y={point.y - radius - 4}
-                    textAnchor="middle"
                   >
-                    {point.label}
-                  </text>
+                    {showPinLabels ? null : <title>{point.label}</title>}
+                  </circle>
+                  {showPinLabels ? (
+                    <text
+                      className="pin-editor__pin-label"
+                      x={point.x}
+                      y={point.y - radius - 4}
+                      textAnchor="middle"
+                    >
+                      {point.label}
+                    </text>
+                  ) : null}
                 </g>
               )
             })}

@@ -139,6 +139,7 @@ function normalizePhysicalPoint(value: unknown): PhysicalPoint {
     throughHole: asOptionalBoolean(value.throughHole),
     diameterMm: asOptionalNumber(value.diameterMm),
     notes: asOptionalString(value.notes),
+    netId: asOptionalString(value.netId),
   }
 }
 
