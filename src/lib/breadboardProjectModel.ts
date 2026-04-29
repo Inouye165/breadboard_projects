@@ -49,6 +49,11 @@ export type ProjectModuleInstance = {
   centerX: number
   centerY: number
   rotationDeg: number
+  /**
+   * Multiplicative scale override (default 1.0). Use to fine-tune the
+   * rendered size so module pins line up with the breadboard holes.
+   */
+  scaleFactor?: number
 }
 
 export type BreadboardProject = {

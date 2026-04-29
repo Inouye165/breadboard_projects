@@ -461,6 +461,13 @@ export function WireEditor({
     }))
   }
 
+  function handleSetModuleScale(moduleId: string, scaleFactor: number) {
+    updateModule(moduleId, (instance) => ({
+      ...instance,
+      scaleFactor: Math.max(0.5, Math.min(2, scaleFactor)),
+    }))
+  }
+
   function handleAlignModuleToPin(moduleId: string) {
     const instance = (project.modules ?? []).find((entry) => entry.id === moduleId)
 
@@ -476,11 +483,12 @@ export function WireEditor({
 
     // Use a very large threshold so align-to-pin always finds the nearest pair
     const largeThresholdPx = Math.max(safeWidth, safeHeight)
+    const effectivePpm = pixelsPerMm * (instance.scaleFactor ?? 1)
     const { center } = computeSnapResult(
       { x: instance.centerX, y: instance.centerY },
       instance.rotationDeg,
       part,
-      pixelsPerMm,
+      effectivePpm,
       breadboard.points,
       largeThresholdPx,
     )
@@ -544,11 +552,12 @@ export function WireEditor({
     const part = instance ? libraryPartIndex.get(instance.libraryPartId) : undefined
 
     if (part && instance) {
+      const instancePpm = pixelsPerMm * (instance.scaleFactor ?? 1)
       const { center: snappedPosition, snapPinId } = computeSnapResult(
         rawPosition,
         instance.rotationDeg,
         part,
-        pixelsPerMm,
+        instancePpm,
         breadboard.points,
         SNAP_THRESHOLD_MM * pixelsPerMm,
       )
@@ -589,8 +598,9 @@ export function WireEditor({
     setModuleDragState(null)
     updateModule(moduleId, (instance) => {
       const part = libraryPartIndex.get(instance.libraryPartId)
+      const instancePpm = pixelsPerMm * (instance.scaleFactor ?? 1)
       const { center } = part
-        ? computeSnapResult(rawPosition, instance.rotationDeg, part, pixelsPerMm, breadboard.points, SNAP_THRESHOLD_MM * pixelsPerMm)
+        ? computeSnapResult(rawPosition, instance.rotationDeg, part, instancePpm, breadboard.points, SNAP_THRESHOLD_MM * pixelsPerMm)
         : { center: rawPosition }
 
       return {
@@ -1088,8 +1098,9 @@ export function WireEditor({
               const view =
                 part.imageViews.find((entry) => entry.id === instance.viewId) ??
                 part.imageViews[0]
-              const widthPx = part.dimensions.widthMm * pixelsPerMm
-              const heightPx = part.dimensions.heightMm * pixelsPerMm
+              const effectivePpm = pixelsPerMm * (instance.scaleFactor ?? 1)
+              const widthPx = part.dimensions.widthMm * effectivePpm
+              const heightPx = part.dimensions.heightMm * effectivePpm
 
               if (widthPx <= 0 || heightPx <= 0) {
                 return null
@@ -1146,8 +1157,9 @@ export function WireEditor({
               if (!part) {
                 return []
               }
-              const widthPx = part.dimensions.widthMm * pixelsPerMm
-              const heightPx = part.dimensions.heightMm * pixelsPerMm
+              const effectivePpm = pixelsPerMm * (instance.scaleFactor ?? 1)
+              const widthPx = part.dimensions.widthMm * effectivePpm
+              const heightPx = part.dimensions.heightMm * effectivePpm
               if (widthPx <= 0 || heightPx <= 0) {
                 return []
               }
@@ -1158,7 +1170,7 @@ export function WireEditor({
               return part.physicalPoints
                 .filter((p) => isSnapPoint(p) && (!activeViewId || getViewForPoint(part, p)?.id === activeViewId))
                 .map((physPt) => {
-                  const { dx, dy } = getPhysicalPointModuleOffsetPx(physPt, part, pixelsPerMm)
+                  const { dx, dy } = getPhysicalPointModuleOffsetPx(physPt, part, effectivePpm)
                   const rotDx = dx * cosA - dy * sinA
                   const rotDy = dx * sinA + dy * cosA
                   const absX = instance.centerX + rotDx
@@ -1501,6 +1513,7 @@ export function WireEditor({
         onRemove={handleRemoveModule}
         onRotate={handleRotateModule}
         onSetRotation={handleSetModuleRotation}
+        onSetScale={handleSetModuleScale}
         onAlignToPin={handleAlignModuleToPin}
       />
       <ComponentsPanel
@@ -1632,6 +1645,7 @@ type ModulesPanelProps = {
   onRemove: (moduleId: string) => void
   onRotate: (moduleId: string, deltaDeg: number) => void
   onSetRotation: (moduleId: string, rotationDeg: number) => void
+  onSetScale: (moduleId: string, scaleFactor: number) => void
   onAlignToPin: (moduleId: string) => void
 }
 
@@ -1645,6 +1659,7 @@ function ModulesPanel({
   onRemove,
   onRotate,
   onSetRotation,
+  onSetScale,
   onAlignToPin,
 }: ModulesPanelProps) {
   const placeableParts = useMemo(
@@ -1811,6 +1826,40 @@ function ModulesPanel({
                     disabled={isBusy}
                   />
                 </label>
+                <label className="control-group" htmlFor={`module-scale-${instance.id}`}>
+                  <span className="control-group__label">Scale&nbsp;{((instance.scaleFactor ?? 1) * 100).toFixed(0)}%</span>
+                  <input
+                    id={`module-scale-${instance.id}`}
+                    className="control-group__input"
+                    type="range"
+                    min={50}
+                    max={200}
+                    step={1}
+                    value={Math.round((instance.scaleFactor ?? 1) * 100)}
+                    onChange={(event) =>
+                      onSetScale(instance.id, Number(event.target.value) / 100)
+                    }
+                    disabled={isBusy}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => onSetScale(instance.id, Math.round((instance.scaleFactor ?? 1) * 100 - 1) / 100)}
+                  disabled={isBusy || Math.round((instance.scaleFactor ?? 1) * 100) <= 50}
+                  aria-label={`Decrease ${displayName} scale by 1%`}
+                >
+                  − 1%
+                </button>
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => onSetScale(instance.id, Math.round((instance.scaleFactor ?? 1) * 100 + 1) / 100)}
+                  disabled={isBusy || Math.round((instance.scaleFactor ?? 1) * 100) >= 200}
+                  aria-label={`Increase ${displayName} scale by 1%`}
+                >
+                  + 1%
+                </button>
                 <button
                   type="button"
                   className="action-button action-button--ghost"

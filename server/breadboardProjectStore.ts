@@ -106,6 +106,10 @@ function normalizeProjectModuleInstance(value: unknown): ProjectModuleInstance {
     throw new Error('Invalid module viewId.')
   }
 
+  if (value.scaleFactor !== undefined && typeof value.scaleFactor !== 'number') {
+    throw new Error('Invalid module scaleFactor.')
+  }
+
   return {
     id: value.id,
     libraryPartId: value.libraryPartId,
@@ -113,6 +117,7 @@ function normalizeProjectModuleInstance(value: unknown): ProjectModuleInstance {
     centerX: value.centerX,
     centerY: value.centerY,
     rotationDeg: value.rotationDeg,
+    scaleFactor: value.scaleFactor as number | undefined,
   }
 }
 
