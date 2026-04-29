@@ -787,6 +787,62 @@ export function WireEditor({
     return map
   }, [project.wires])
 
+  // Pin holes whose center lies under the body of any wire. We hide these
+  // breadboard hole circles so the wire reads like a real solid jumper that
+  // physically blocks the view of the hole it's plugged through (and any
+  // hole it passes over). Without this, the pin <circle> elements (rendered
+  // after the wires) would paint white-with-orange-dot holes back on top of
+  // the wire body.
+  const wireCoveredPinIds = useMemo(() => {
+    const covered = new Set<string>()
+    if (project.wires.length === 0 || breadboard.points.length === 0) {
+      return covered
+    }
+    // Match the per-wire body width used in render: max(radius * 3.4, strokeWidth * 1.9).
+    const bodyWidth = Math.max(radius * 3.4, strokeWidth * 1.9)
+    const halfW = bodyWidth / 2
+    const halfWSq = halfW * halfW
+    const distSqToSegment = (
+      px: number,
+      py: number,
+      ax: number,
+      ay: number,
+      bx: number,
+      by: number,
+    ) => {
+      const dx = bx - ax
+      const dy = by - ay
+      const lenSq = dx * dx + dy * dy
+      if (lenSq <= 0) {
+        const ddx = px - ax
+        const ddy = py - ay
+        return ddx * ddx + ddy * ddy
+      }
+      let t = ((px - ax) * dx + (py - ay) * dy) / lenSq
+      if (t < 0) t = 0
+      else if (t > 1) t = 1
+      const cx = ax + t * dx
+      const cy = ay + t * dy
+      const ddx = px - cx
+      const ddy = py - cy
+      return ddx * ddx + ddy * ddy
+    }
+    for (const segment of wireSegments) {
+      const vertices = getWireVertices(segment.wire, segment.fromPoint, segment.toPoint)
+      for (let i = 0; i < vertices.length - 1; i += 1) {
+        const a = vertices[i]
+        const b = vertices[i + 1]
+        for (const point of breadboard.points) {
+          if (covered.has(point.id)) continue
+          if (distSqToSegment(point.x, point.y, a.x, a.y, b.x, b.y) <= halfWSq) {
+            covered.add(point.id)
+          }
+        }
+      }
+    }
+    return covered
+  }, [wireSegments, breadboard.points, radius, strokeWidth, project.wires.length])
+
   return (
     <section className="wire-editor" aria-label="Wire breadboard">
       <header className="pin-editor__header">
@@ -1381,6 +1437,12 @@ export function WireEditor({
                 return null
               }
               if (isCovered && !isPendingFrom && !isSnapTarget) {
+                return null
+              }
+              // A real jumper wire physically blocks the view of any hole it
+              // sits over. Hide pin-hole circles whose center lies under the
+              // wire body so the rendered wire reads as solid plastic.
+              if (wireCoveredPinIds.has(point.id) && !isPendingFrom && !isSnapTarget) {
                 return null
               }
               const pinRadius = radius
