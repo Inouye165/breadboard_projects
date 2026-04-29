@@ -33,6 +33,52 @@ import {
 
 const WIRE_COLORS = ['#cc3333', '#1f8e4d', '#1f5fcc', '#e08a00', '#7a3fc6', '#000000']
 
+/** Parse a #rgb or #rrggbb hex color into [r,g,b] (0-255). Returns null for unknown formats. */
+function parseHexColor(hex: string): [number, number, number] | null {
+  const m = hex.trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i)
+  if (!m) {
+    return null
+  }
+  let value = m[1]
+  if (value.length === 3) {
+    value = value.split('').map((c) => c + c).join('')
+  }
+  const num = parseInt(value, 16)
+  return [(num >> 16) & 0xff, (num >> 8) & 0xff, num & 0xff]
+}
+
+function clampByte(n: number) {
+  return Math.max(0, Math.min(255, Math.round(n)))
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const h = (n: number) => clampByte(n).toString(16).padStart(2, '0')
+  return `#${h(r)}${h(g)}${h(b)}`
+}
+
+/** Mix `color` toward black by `amount` in [0,1]. */
+function shadeDarken(color: string, amount: number): string {
+  const rgb = parseHexColor(color)
+  if (!rgb) {
+    return color
+  }
+  const k = 1 - amount
+  return rgbToHex(rgb[0] * k, rgb[1] * k, rgb[2] * k)
+}
+
+/** Mix `color` toward white by `amount` in [0,1]. */
+function shadeLighten(color: string, amount: number): string {
+  const rgb = parseHexColor(color)
+  if (!rgb) {
+    return color
+  }
+  return rgbToHex(
+    rgb[0] + (255 - rgb[0]) * amount,
+    rgb[1] + (255 - rgb[1]) * amount,
+    rgb[2] + (255 - rgb[2]) * amount,
+  )
+}
+
 const RAIL_COLORS = [
   '#1f5fcc',
   '#cc3333',
@@ -741,6 +787,62 @@ export function WireEditor({
     return map
   }, [project.wires])
 
+  // Pin holes whose center lies under the body of any wire. We hide these
+  // breadboard hole circles so the wire reads like a real solid jumper that
+  // physically blocks the view of the hole it's plugged through (and any
+  // hole it passes over). Without this, the pin <circle> elements (rendered
+  // after the wires) would paint white-with-orange-dot holes back on top of
+  // the wire body.
+  const wireCoveredPinIds = useMemo(() => {
+    const covered = new Set<string>()
+    if (project.wires.length === 0 || breadboard.points.length === 0) {
+      return covered
+    }
+    // Match the per-wire body width used in render: max(radius * 3.4, strokeWidth * 1.9).
+    const bodyWidth = Math.max(radius * 3.4, strokeWidth * 1.9)
+    const halfW = bodyWidth / 2
+    const halfWSq = halfW * halfW
+    const distSqToSegment = (
+      px: number,
+      py: number,
+      ax: number,
+      ay: number,
+      bx: number,
+      by: number,
+    ) => {
+      const dx = bx - ax
+      const dy = by - ay
+      const lenSq = dx * dx + dy * dy
+      if (lenSq <= 0) {
+        const ddx = px - ax
+        const ddy = py - ay
+        return ddx * ddx + ddy * ddy
+      }
+      let t = ((px - ax) * dx + (py - ay) * dy) / lenSq
+      if (t < 0) t = 0
+      else if (t > 1) t = 1
+      const cx = ax + t * dx
+      const cy = ay + t * dy
+      const ddx = px - cx
+      const ddy = py - cy
+      return ddx * ddx + ddy * ddy
+    }
+    for (const segment of wireSegments) {
+      const vertices = getWireVertices(segment.wire, segment.fromPoint, segment.toPoint)
+      for (let i = 0; i < vertices.length - 1; i += 1) {
+        const a = vertices[i]
+        const b = vertices[i + 1]
+        for (const point of breadboard.points) {
+          if (covered.has(point.id)) continue
+          if (distSqToSegment(point.x, point.y, a.x, a.y, b.x, b.y) <= halfWSq) {
+            covered.add(point.id)
+          }
+        }
+      }
+    }
+    return covered
+  }, [wireSegments, breadboard.points, radius, strokeWidth, project.wires.length])
+
   return (
     <section className="wire-editor" aria-label="Wire breadboard">
       <header className="pin-editor__header">
@@ -821,6 +923,30 @@ export function WireEditor({
               height={safeHeight}
               preserveAspectRatio="none"
             />
+            {/*
+              Reusable visual assets for the glossy 3D jumper-wire look:
+                - wire-editor__silver-cap: vertical metallic gradient applied
+                  to the small endpoint pins to mimic shiny tinned metal.
+              (We render the wire's drop shadow as an offset darker
+              polyline rather than via an SVG <filter>, because the
+              default filter region uses objectBoundingBox which collapses
+              to zero size for perfectly horizontal/vertical strokes,
+              causing the wire to disappear.)
+            */}
+            <defs>
+              <linearGradient
+                id="wire-editor__silver-cap"
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="1"
+              >
+                <stop offset="0%" stopColor="#f5f7fa" />
+                <stop offset="35%" stopColor="#cdd2d8" />
+                <stop offset="60%" stopColor="#7d848c" />
+                <stop offset="100%" stopColor="#3a3f44" />
+              </linearGradient>
+            </defs>
             {showRails ? (
               <g className="wire-editor__rails" aria-hidden="true">
                 {electricalGroups.map((group, groupIndex) => {
@@ -1074,45 +1200,157 @@ export function WireEditor({
                     )
                   : baseVertices
               const points = vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ')
-              // A wire is "live" when either of its endpoints is connected to
-              // a module pin (directly aligned or transitively via rails and
-              // other wires). Live wires get a dashed yellow stripe overlay
-              // so the entire signal path (live rail → live wire → live rail
-              // → module pin) reads as one continuous lit path. The wire's
-              // own user color stays as the base stroke so different wires
-              // remain distinguishable.
               const isLiveWire =
                 connectedPinIds.has(wire.fromPointId) || connectedPinIds.has(wire.toPointId)
-              const liveStrokeWidth = isPending ? strokeWidth * 1.6 : strokeWidth
-              const wireUserColor = wire.color ?? '#222'
-
+              const wireUserColor = wire.color ?? '#cc3333'
+              // Glossy plastic round-jumper rendering. The wire is a single
+              // wide stroke filled with a per-wire linearGradient oriented
+              // perpendicular to the wire's direction, so the eye reads a
+              // continuous cylindrical shading band across the wire's width
+              // (dark edge -> body -> bright gloss stripe -> body -> dark
+              // edge). Width is scaled large enough to fully cover the
+              // breadboard hole underneath, like a real plugged-in jumper.
+              const bodyWidth = Math.max(
+                radius * 3.4,
+                isPending ? strokeWidth * 2.2 : strokeWidth * 1.9,
+              )
+              const edgeWidth = bodyWidth * 1.06
+              const edgeColor = shadeDarken(wireUserColor, 0.75)
+              const midColor = shadeDarken(wireUserColor, 0.15)
+              const glossColor = shadeLighten(wireUserColor, 0.65)
+              // Perpendicular gradient endpoints. Use first->last vertex as
+              // the dominant wire direction (good enough for our short
+              // routed wires; multi-segment wires still get a coherent
+              // cross-section because the gradient is anchored at the wire's
+              // midpoint).
+              const v0 = vertices[0]
+              const vN = vertices[vertices.length - 1]
+              const midX = (v0.x + vN.x) / 2
+              const midY = (v0.y + vN.y) / 2
+              const dx = vN.x - v0.x
+              const dy = vN.y - v0.y
+              const len = Math.max(0.0001, Math.hypot(dx, dy))
+              // Unit perpendicular vector. Rotated -90deg so the "top" of
+              // the wire (gradient origin) is the upper-left side, matching
+              // an overhead light source for consistency across all wires.
+              const perpX = -dy / len
+              const perpY = dx / len
+              const halfW = bodyWidth / 2
+              const gradientId = `wire-grad-${wire.id}`
+              const gx1 = midX + perpX * halfW
+              const gy1 = midY + perpY * halfW
+              const gx2 = midX - perpX * halfW
+              const gy2 = midY - perpY * halfW
+              const ariaLabel = `Wire from ${fromPoint.label} to ${toPoint.label}${
+                isPending ? ' (click again to delete)' : ''
+              }${isLiveWire ? ' (live)' : ''}`
+              const capRadius = Math.max(2.4, bodyWidth * 0.42)
+              const crimpRadius = capRadius * 0.55
+              const endpoints = [v0, vN]
               return (
                 <g key={wire.id}>
+                  <defs>
+                    <linearGradient
+                      id={gradientId}
+                      gradientUnits="userSpaceOnUse"
+                      x1={gx1}
+                      y1={gy1}
+                      x2={gx2}
+                      y2={gy2}
+                    >
+                      <stop offset="0%" stopColor={edgeColor} />
+                      <stop offset="18%" stopColor={midColor} />
+                      <stop offset="38%" stopColor={wireUserColor} />
+                      <stop offset="50%" stopColor={glossColor} />
+                      <stop offset="62%" stopColor={wireUserColor} />
+                      <stop offset="82%" stopColor={midColor} />
+                      <stop offset="100%" stopColor={edgeColor} />
+                    </linearGradient>
+                  </defs>
+                  {/* offset shadow polyline – mimics a soft drop shadow without
+                      using an SVG <filter> (which would collapse for perfectly
+                      horizontal or vertical wires whose bbox has zero height
+                      or width). */}
+                  <polyline
+                    points={vertices
+                      .map((v) => `${v.x + 1.2},${v.y + 2.2}`)
+                      .join(' ')}
+                    fill="none"
+                    stroke="#000000"
+                    strokeOpacity={0.4}
+                    strokeWidth={edgeWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                  {/* dark outer rim – guarantees a crisp dark edge even if
+                      the gradient endpoints fall slightly inside the stroke
+                      (e.g. very short wires). */}
+                  <polyline
+                    points={points}
+                    fill="none"
+                    stroke={edgeColor}
+                    strokeWidth={edgeWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                  {/* main colored body with cross-section gradient – click
+                      target, fully opaque so it covers the holes underneath. */}
                   <polyline
                     className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
                     points={points}
                     fill="none"
-                    stroke={wireUserColor}
-                    strokeWidth={liveStrokeWidth}
+                    stroke={`url(#${gradientId})`}
+                    strokeWidth={bodyWidth}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     role="button"
-                    aria-label={`Wire from ${fromPoint.label} to ${toPoint.label}${isPending ? ' (click again to delete)' : ''}${isLiveWire ? ' (live)' : ''}`}
+                    aria-label={ariaLabel}
                     onClick={() => handleWireClick(wire.id)}
                   />
-                  {isLiveWire ? (
-                    <polyline
-                      points={points}
-                      fill="none"
-                      stroke="#facc15"
-                      strokeWidth={Math.max(1, liveStrokeWidth * 0.45)}
-                      strokeDasharray={`${liveStrokeWidth * 1.2} ${liveStrokeWidth * 1.2}`}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      pointerEvents="none"
-                      aria-hidden="true"
-                    />
-                  ) : null}
+                  {/* thin pure-white specular line – the glossy "wet" sheen
+                      catching the brightest light on the cylinder's top. */}
+                  <polyline
+                    points={points}
+                    fill="none"
+                    stroke="#ffffff"
+                    strokeWidth={Math.max(0.7, bodyWidth * 0.08)}
+                    strokeOpacity={0.55}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                  {/* metallic silver pin caps with crimp band */}
+                  {endpoints.map((pt, i) => (
+                    <g key={`wire-cap-${wire.id}-${i}`} pointerEvents="none" aria-hidden="true">
+                      <circle
+                        cx={pt.x}
+                        cy={pt.y}
+                        r={capRadius}
+                        fill={edgeColor}
+                        opacity={0.85}
+                      />
+                      <circle
+                        cx={pt.x}
+                        cy={pt.y}
+                        r={crimpRadius}
+                        fill="url(#wire-editor__silver-cap)"
+                        stroke="#2a2d31"
+                        strokeWidth={0.4}
+                      />
+                      <circle
+                        cx={pt.x - crimpRadius * 0.25}
+                        cy={pt.y - crimpRadius * 0.35}
+                        r={crimpRadius * 0.35}
+                        fill="#ffffff"
+                        opacity={0.65}
+                      />
+                    </g>
+                  ))}
                 </g>
               )
             })}
@@ -1199,6 +1437,12 @@ export function WireEditor({
                 return null
               }
               if (isCovered && !isPendingFrom && !isSnapTarget) {
+                return null
+              }
+              // A real jumper wire physically blocks the view of any hole it
+              // sits over. Hide pin-hole circles whose center lies under the
+              // wire body so the rendered wire reads as solid plastic.
+              if (wireCoveredPinIds.has(point.id) && !isPendingFrom && !isSnapTarget) {
                 return null
               }
               const pinRadius = radius
