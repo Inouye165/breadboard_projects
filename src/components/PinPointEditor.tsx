@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   createAxisGroupId,
@@ -110,6 +110,28 @@ export function PinPointEditor({
   const [eraseMode, setEraseMode] = useState(false)
   const [eraseRect, setEraseRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const [eraseDragging, setEraseDragging] = useState(false)
+  const [copyMode, setCopyMode] = useState(false)
+  const [copyRect, setCopyRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const [copyDragging, setCopyDragging] = useState(false)
+  const [copyPins, setCopyPins] = useState<Array<{ dx: number; dy: number }> | null>(null)
+  const [copyCursor, setCopyCursor] = useState<{ x: number; y: number } | null>(null)
+  const [transformMode, setTransformMode] = useState(false)
+  const [transformRect, setTransformRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const [transformDragging, setTransformDragging] = useState(false)
+  const [transformState, setTransformState] = useState<{
+    selectedIds: Set<string>
+    cx: number
+    cy: number
+    tx: number
+    ty: number
+    rotDeg: number
+    scale: number
+  } | null>(null)
+  const [undoStack, setUndoStack] = useState<BreadboardDefinition[]>([])
+  const [redoStack, setRedoStack] = useState<BreadboardDefinition[]>([])
+  const undoHandlerRef = useRef<() => void>(() => {})
+  const redoHandlerRef = useRef<() => void>(() => {})
+  const transformKeyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {})
   const safeWidth = imageWidth > 0 ? imageWidth : 1
   const safeHeight = imageHeight > 0 ? imageHeight : 1
 
@@ -120,7 +142,40 @@ export function PinPointEditor({
     setGridStep({ kind: 'idle' })
     setLinkMode(false)
     setLinkSelection(new Set())
+    setUndoStack([])
+    setRedoStack([])
+    setCopyMode(false)
+    setCopyRect(null)
+    setCopyDragging(false)
+    setCopyPins(null)
+    setCopyCursor(null)
   }
+
+  function pushChange(nextDefinition: BreadboardDefinition) {
+    setUndoStack((prev) => [...prev.slice(-49), definition])
+    setRedoStack([])
+    onChange(nextDefinition)
+  }
+
+  function handleUndo() {
+    if (undoStack.length === 0) return
+    const prev = undoStack[undoStack.length - 1]
+    setRedoStack((r) => [...r, definition])
+    setUndoStack((u) => u.slice(0, -1))
+    onChange(prev)
+  }
+
+  function handleRedo() {
+    if (redoStack.length === 0) return
+    const next = redoStack[redoStack.length - 1]
+    setUndoStack((u) => [...u, definition])
+    setRedoStack((r) => r.slice(0, -1))
+    onChange(next)
+  }
+
+  undoHandlerRef.current = handleUndo
+  redoHandlerRef.current = handleRedo
+  transformKeyHandlerRef.current = handleTransformKey
 
   const gridPreview = useMemo(() => {
     if (gridStep.kind !== 'configure') return null
@@ -166,7 +221,7 @@ export function PinPointEditor({
 
     const target = event.target as SVGElement | null
 
-    if (target?.dataset?.pinPointId && !eraseMode) {
+    if (target?.dataset?.pinPointId && !eraseMode && !(copyMode && copyPins !== null) && !transformMode) {
       // Pin click handled separately.
       return
     }
@@ -174,6 +229,27 @@ export function PinPointEditor({
     const coordinates = getStageCoordinates(event)
 
     if (!coordinates) {
+      return
+    }
+
+    // Transform area mode: drag a rectangle to select pins, then nudge/rotate/scale with keys.
+    if (transformMode) {
+      if (transformState !== null) return
+      event.currentTarget.setPointerCapture(event.pointerId)
+      setTransformDragging(true)
+      setTransformRect({ x1: coordinates.x, y1: coordinates.y, x2: coordinates.x, y2: coordinates.y })
+      return
+    }
+
+    // Copy area mode: drag to select, then click to stamp.
+    if (copyMode) {
+      if (copyPins === null) {
+        event.currentTarget.setPointerCapture(event.pointerId)
+        setCopyDragging(true)
+        setCopyRect({ x1: coordinates.x, y1: coordinates.y, x2: coordinates.x, y2: coordinates.y })
+      } else {
+        handlePlaceCopy(coordinates.x, coordinates.y)
+      }
       return
     }
 
@@ -239,7 +315,7 @@ export function PinPointEditor({
       snapSource: 'manual',
     }
 
-    onChange({
+    pushChange({
       ...definition,
       points: [...definition.points, newPoint],
     })
@@ -265,7 +341,7 @@ export function PinPointEditor({
       realDistanceMm,
     }
 
-    onChange({ ...definition, scaleCalibration: calibration })
+    pushChange({ ...definition, scaleCalibration: calibration })
     setCalibrationStep({ kind: 'idle' })
     setCalibrationDistance('')
   }
@@ -273,7 +349,7 @@ export function PinPointEditor({
   function handleClearCalibration() {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { scaleCalibration: _removed, ...rest } = definition
-    onChange(rest as BreadboardDefinition)
+    pushChange(rest as BreadboardDefinition)
     setCalibrationStep({ kind: 'idle' })
   }
 
@@ -292,7 +368,7 @@ export function PinPointEditor({
     }
 
     if (pendingRemovalId === pointId) {
-      onChange({
+      pushChange({
         ...definition,
         points: definition.points.filter((point) => point.id !== pointId),
       })
@@ -308,7 +384,7 @@ export function PinPointEditor({
       return
     }
 
-    onChange({
+    pushChange({
       ...definition,
       points: [],
       regions: definition.regions && definition.regions.length > 0 ? [] : definition.regions,
@@ -320,6 +396,11 @@ export function PinPointEditor({
     setGridStep({ kind: 'awaiting-first' })
     setEraseMode(false)
     setEraseRect(null)
+    cancelCopyMode()
+    setTransformMode(false)
+    setTransformRect(null)
+    setTransformDragging(false)
+    setTransformState(null)
   }
 
   function cancelGridFill() {
@@ -416,7 +497,7 @@ export function PinPointEditor({
       nextRegions = [...nextRegions, region]
     }
 
-    onChange({
+    pushChange({
       ...definition,
       points: allPoints,
       regions: nextRegions.length > 0 ? nextRegions : definition.regions,
@@ -439,6 +520,11 @@ export function PinPointEditor({
     setLinkMode(true)
     setEraseMode(false)
     setEraseRect(null)
+    cancelCopyMode()
+    setTransformMode(false)
+    setTransformRect(null)
+    setTransformDragging(false)
+    setTransformState(null)
   }
 
   function cancelLinkMode() {
@@ -454,6 +540,11 @@ export function PinPointEditor({
     setPendingRemovalId(null)
     setEraseMode(true)
     setEraseRect(null)
+    cancelCopyMode()
+    setTransformMode(false)
+    setTransformRect(null)
+    setTransformDragging(false)
+    setTransformState(null)
   }
 
   function cancelEraseMode() {
@@ -462,14 +553,204 @@ export function PinPointEditor({
     setEraseDragging(false)
   }
 
+  function startCopyMode() {
+    setCalibrationStep({ kind: 'idle' })
+    setGridStep({ kind: 'idle' })
+    setLinkMode(false)
+    setLinkSelection(new Set())
+    setEraseMode(false)
+    setEraseRect(null)
+    setTransformMode(false)
+    setTransformRect(null)
+    setTransformDragging(false)
+    setTransformState(null)
+    setCopyMode(true)
+    setCopyRect(null)
+    setCopyDragging(false)
+    setCopyPins(null)
+    setCopyCursor(null)
+  }
+
+  function cancelCopyMode() {
+    setCopyMode(false)
+    setCopyRect(null)
+    setCopyDragging(false)
+    setCopyPins(null)
+    setCopyCursor(null)
+  }
+
+  function handlePlaceCopy(x: number, y: number) {
+    if (!copyPins) return
+    let labelCursor = Number.parseInt(nextPointLabel(definition.points), 10)
+    if (!Number.isFinite(labelCursor) || labelCursor < 1) labelCursor = 1
+    const newPoints: ConnectionPoint[] = copyPins.map((pin) => ({
+      id: createPointId(),
+      label: String(labelCursor++),
+      x: x + pin.dx,
+      y: y + pin.dy,
+      kind: 'breadboard-hole',
+      snapSource: 'manual',
+    }))
+    pushChange({
+      ...definition,
+      points: [...definition.points, ...newPoints],
+    })
+  }
+
+  function getTransformedPoint(
+    p: { x: number; y: number },
+    ts: { cx: number; cy: number; tx: number; ty: number; rotDeg: number; scale: number },
+  ) {
+    const cosA = Math.cos((ts.rotDeg * Math.PI) / 180)
+    const sinA = Math.sin((ts.rotDeg * Math.PI) / 180)
+    const dx = (p.x - ts.cx) * ts.scale
+    const dy = (p.y - ts.cy) * ts.scale
+    return {
+      x: ts.cx + ts.tx + dx * cosA - dy * sinA,
+      y: ts.cy + ts.ty + dx * sinA + dy * cosA,
+    }
+  }
+
+  function startTransformMode() {
+    setCalibrationStep({ kind: 'idle' })
+    setGridStep({ kind: 'idle' })
+    setLinkMode(false)
+    setLinkSelection(new Set())
+    setEraseMode(false)
+    setEraseRect(null)
+    setCopyMode(false)
+    setCopyRect(null)
+    setCopyDragging(false)
+    setCopyPins(null)
+    setCopyCursor(null)
+    setTransformMode(true)
+    setTransformRect(null)
+    setTransformDragging(false)
+    setTransformState(null)
+  }
+
+  function cancelTransformMode() {
+    setTransformMode(false)
+    setTransformRect(null)
+    setTransformDragging(false)
+    setTransformState(null)
+  }
+
+  function handleApplyTransform() {
+    if (transformState === null) return
+    const ts = transformState
+    const nextPoints = definition.points.map((p) => {
+      if (!ts.selectedIds.has(p.id)) return p
+      const { x, y } = getTransformedPoint(p, ts)
+      return { ...p, x, y }
+    })
+    pushChange({ ...definition, points: nextPoints })
+    setTransformState(null)
+  }
+
+  function handleTransformKey(event: KeyboardEvent) {
+    if (!transformMode) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelTransformMode()
+      return
+    }
+    if (transformState === null) return
+    const nudge = event.shiftKey ? 5 : 1
+    const rotStep = event.shiftKey ? 1 : 0.1
+    const scaleStep = event.shiftKey ? 0.01 : 0.001
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      setTransformState((s) => (s ? { ...s, tx: s.tx - nudge } : s))
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      setTransformState((s) => (s ? { ...s, tx: s.tx + nudge } : s))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setTransformState((s) => (s ? { ...s, ty: s.ty - nudge } : s))
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setTransformState((s) => (s ? { ...s, ty: s.ty + nudge } : s))
+    } else if (event.key === '[') {
+      event.preventDefault()
+      setTransformState((s) => (s ? { ...s, rotDeg: s.rotDeg - rotStep } : s))
+    } else if (event.key === ']') {
+      event.preventDefault()
+      setTransformState((s) => (s ? { ...s, rotDeg: s.rotDeg + rotStep } : s))
+    } else if (event.key === '=' || event.key === '+') {
+      event.preventDefault()
+      setTransformState((s) => (s ? { ...s, scale: Math.min(5, s.scale + scaleStep) } : s))
+    } else if (event.key === '-' && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault()
+      setTransformState((s) => (s ? { ...s, scale: Math.max(0.1, s.scale - scaleStep) } : s))
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      handleApplyTransform()
+    }
+  }
+
   function handleErasePointerMove(event: React.PointerEvent<SVGSVGElement>) {
-    if (!eraseDragging) return
+    if (!eraseDragging && !copyDragging && !transformDragging && !(copyMode && copyPins !== null)) return
     const coordinates = getStageCoordinates(event)
     if (!coordinates) return
-    setEraseRect((prev) => (prev ? { ...prev, x2: coordinates.x, y2: coordinates.y } : null))
+    if (eraseDragging) {
+      setEraseRect((prev) => (prev ? { ...prev, x2: coordinates.x, y2: coordinates.y } : null))
+      return
+    }
+    if (copyDragging) {
+      setCopyRect((prev) => (prev ? { ...prev, x2: coordinates.x, y2: coordinates.y } : null))
+      return
+    }
+    if (transformDragging) {
+      setTransformRect((prev) => (prev ? { ...prev, x2: coordinates.x, y2: coordinates.y } : null))
+      return
+    }
+    setCopyCursor(coordinates)
   }
 
   function handleErasePointerUp() {
+    if (transformDragging && transformRect) {
+      setTransformDragging(false)
+      setTransformRect(null)
+      const minX = Math.min(transformRect.x1, transformRect.x2)
+      const maxX = Math.max(transformRect.x1, transformRect.x2)
+      const minY = Math.min(transformRect.y1, transformRect.y2)
+      const maxY = Math.max(transformRect.y1, transformRect.y2)
+      const selected = definition.points.filter(
+        (p) => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY,
+      )
+      if (selected.length > 0) {
+        const cx = (minX + maxX) / 2
+        const cy = (minY + maxY) / 2
+        setTransformState({
+          selectedIds: new Set(selected.map((p) => p.id)),
+          cx,
+          cy,
+          tx: 0,
+          ty: 0,
+          rotDeg: 0,
+          scale: 1,
+        })
+      }
+      return
+    }
+    if (copyDragging && copyRect) {
+      setCopyDragging(false)
+      const minX = Math.min(copyRect.x1, copyRect.x2)
+      const maxX = Math.max(copyRect.x1, copyRect.x2)
+      const minY = Math.min(copyRect.y1, copyRect.y2)
+      const maxY = Math.max(copyRect.y1, copyRect.y2)
+      const selected = definition.points.filter(
+        (p) => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY,
+      )
+      setCopyRect(null)
+      if (selected.length > 0) {
+        const cx = (minX + maxX) / 2
+        const cy = (minY + maxY) / 2
+        setCopyPins(selected.map((p) => ({ dx: p.x - cx, dy: p.y - cy })))
+      }
+      return
+    }
     if (!eraseDragging || !eraseRect) return
     setEraseDragging(false)
     const minX = Math.min(eraseRect.x1, eraseRect.x2)
@@ -484,12 +765,31 @@ export function PinPointEditor({
     setEraseRect(null)
     if (toRemove.size === 0) return
     const nextRegions = pruneSelectedFromExistingGroups(definition.regions, toRemove)
-    onChange({
+    pushChange({
       ...definition,
       points: definition.points.filter((p) => !toRemove.has(p.id)),
       regions: nextRegions,
     })
   }
+
+  // Keyboard shortcuts: Ctrl+Z = undo, Ctrl+Y / Ctrl+Shift+Z = redo.
+  // Arrow / [ ] + - keys when in transform mode.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      transformKeyHandlerRef.current(event)
+      if (!event.ctrlKey && !event.metaKey) return
+      if (event.key === 'z' && !event.shiftKey) {
+        event.preventDefault()
+        undoHandlerRef.current()
+      } else if (event.key === 'y' || (event.key === 'z' && event.shiftKey)) {
+        event.preventDefault()
+        redoHandlerRef.current()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   function pruneSelectedFromExistingGroups(
     regions: DefinitionRegion[] | undefined,
@@ -547,7 +847,7 @@ export function PinPointEditor({
         columnId: undefined,
       }
     })
-    onChange({
+    pushChange({
       ...definition,
       points: nextPoints,
       regions: [...(prunedRegions ?? []), newRegion],
@@ -572,7 +872,7 @@ export function PinPointEditor({
         columnId: undefined,
       }
     })
-    onChange({
+    pushChange({
       ...definition,
       points: nextPoints,
       regions: prunedRegions,
@@ -611,6 +911,26 @@ export function PinPointEditor({
               disabled={isBusy}
             >
               Back to alignment
+            </button>
+            <button
+              type="button"
+              className="action-button action-button--ghost"
+              onClick={handleUndo}
+              disabled={isBusy || undoStack.length === 0}
+              title="Undo (Ctrl+Z)"
+              aria-label="Undo last action"
+            >
+              ↩ Undo
+            </button>
+            <button
+              type="button"
+              className="action-button action-button--ghost"
+              onClick={handleRedo}
+              disabled={isBusy || redoStack.length === 0}
+              title="Redo (Ctrl+Y)"
+              aria-label="Redo"
+            >
+              ↪ Redo
             </button>
             <button
               type="button"
@@ -662,6 +982,28 @@ export function PinPointEditor({
             </button>
             <button
               type="button"
+              className={`action-button${copyMode ? '' : ' action-button--ghost'}`}
+              onClick={() => (copyMode ? cancelCopyMode() : startCopyMode())}
+              disabled={isBusy}
+              aria-pressed={copyMode}
+            >
+              {copyMode ? (copyPins !== null ? 'Cancel stamp' : 'Cancel copy') : 'Copy area'}
+            </button>
+            <button
+              type="button"
+              className={`action-button${transformMode ? '' : ' action-button--ghost'}`}
+              onClick={() => (transformMode ? cancelTransformMode() : startTransformMode())}
+              disabled={isBusy}
+              aria-pressed={transformMode}
+            >
+              {transformMode
+                ? transformState !== null
+                  ? 'Cancel move'
+                  : 'Cancel select'
+                : 'Move area'}
+            </button>
+            <button
+              type="button"
               className="action-button"
               onClick={onSaveAndFinish}
               disabled={isBusy}
@@ -696,6 +1038,14 @@ export function PinPointEditor({
           ? 'Link pins: click any pin holes to toggle them in the selection, then Link as rail to connect them electrically. Use Unlink to remove the selection from any rails.'
           : eraseMode
           ? 'Erase area: drag a rectangle over pin holes to remove them all at once.'
+          : copyMode && copyPins === null
+          ? 'Copy area: drag a rectangle to select the pin holes to copy.'
+          : copyMode && copyPins !== null
+          ? `Copy area: ${copyPins.length} pin${copyPins.length === 1 ? '' : 's'} copied — click anywhere on the canvas to stamp them. You can stamp multiple times.`
+          : transformMode && transformState === null
+          ? 'Move area: drag a rectangle to select the pin holes to transform.'
+          : transformMode && transformState !== null
+          ? `Move area: ${transformState.selectedIds.size} pin${transformState.selectedIds.size === 1 ? '' : 's'} selected — Arrow keys to nudge (Shift = 5×), [ / ] to rotate ±0.1° (Shift = ±1°), + / − to scale ±0.1% (Shift = ±1%). Enter to apply, Esc to cancel.`
           : 'Click the image to drop a pin hole. Click an existing pin once to select it, then click again to remove it. These points will be selectable later when wiring the breadboard.'}
       </p>
       {linkMode ? (
@@ -851,6 +1201,34 @@ export function PinPointEditor({
             onClick={() => setGridStep({ kind: 'awaiting-first' })}
           >
             Re-pick corners
+          </button>
+        </div>
+      ) : null}
+      {transformMode && transformState !== null ? (
+        <div className="pin-editor__calibration-form" role="group" aria-label="Move selected pins">
+          <p className="pin-editor__hint" aria-live="polite">
+            {transformState.selectedIds.size} pin{transformState.selectedIds.size === 1 ? '' : 's'} selected
+            {transformState.tx !== 0 || transformState.ty !== 0
+              ? ` · offset (${transformState.tx.toFixed(1)}, ${transformState.ty.toFixed(1)}) px`
+              : ''}
+            {transformState.rotDeg !== 0 ? ` · rotation ${transformState.rotDeg.toFixed(2)}°` : ''}
+            {transformState.scale !== 1 ? ` · scale ${(transformState.scale * 100).toFixed(0)}%` : ''}
+          </p>
+          <button
+            type="button"
+            className="action-button"
+            onClick={handleApplyTransform}
+            disabled={isBusy}
+          >
+            Apply (Enter)
+          </button>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={cancelTransformMode}
+            disabled={isBusy}
+          >
+            Cancel (Esc)
           </button>
         </div>
       ) : null}
@@ -1032,6 +1410,66 @@ export function PinPointEditor({
                 aria-hidden="true"
               />
             ) : null}
+            {copyMode && copyRect !== null ? (
+              <rect
+                x={Math.min(copyRect.x1, copyRect.x2)}
+                y={Math.min(copyRect.y1, copyRect.y2)}
+                width={Math.abs(copyRect.x2 - copyRect.x1)}
+                height={Math.abs(copyRect.y2 - copyRect.y1)}
+                fill="rgba(139, 92, 246, 0.15)"
+                stroke="#8b5cf6"
+                strokeWidth={2}
+                strokeDasharray="6 3"
+                pointerEvents="none"
+                aria-hidden="true"
+              />
+            ) : null}
+            {copyMode && copyPins !== null && copyCursor !== null ? (
+              <g aria-hidden="true" pointerEvents="none">
+                {copyPins.map((pin, i) => (
+                  <circle
+                    key={i}
+                    cx={copyCursor.x + pin.dx}
+                    cy={copyCursor.y + pin.dy}
+                    r={Math.max(3, Math.min(safeWidth, safeHeight) * 0.004)}
+                    fill="#8b5cf6"
+                    fillOpacity={0.55}
+                    stroke="#6d28d9"
+                    strokeWidth={1}
+                  />
+                ))}
+              </g>
+            ) : null}
+            {transformMode && transformRect !== null ? (
+              <rect
+                x={Math.min(transformRect.x1, transformRect.x2)}
+                y={Math.min(transformRect.y1, transformRect.y2)}
+                width={Math.abs(transformRect.x2 - transformRect.x1)}
+                height={Math.abs(transformRect.y2 - transformRect.y1)}
+                fill="rgba(20, 184, 166, 0.1)"
+                stroke="#14b8a6"
+                strokeWidth={2}
+                strokeDasharray="6 3"
+                pointerEvents="none"
+                aria-hidden="true"
+              />
+            ) : null}
+            {transformMode && transformState !== null ? (
+              <g aria-hidden="true" pointerEvents="none">
+                {definition.points
+                  .filter((p) => transformState.selectedIds.has(p.id))
+                  .map((p, i) => {
+                    const tp = getTransformedPoint(p, transformState)
+                    const r = Math.max(3, Math.min(safeWidth, safeHeight) * 0.004)
+                    return (
+                      <g key={i}>
+                        <circle cx={p.x} cy={p.y} r={r + 2} fill="none" stroke="#14b8a6" strokeWidth={2} strokeOpacity={0.6} />
+                        <circle cx={tp.x} cy={tp.y} r={r} fill="#3b82f6" fillOpacity={0.75} stroke="#1e40af" strokeWidth={1} />
+                      </g>
+                    )
+                  })}
+              </g>
+            ) : null}
             {definition.points.map((point) => {
               const isPending = pendingRemovalId === point.id
               const isLinkSelected = linkMode && linkSelection.has(point.id)
@@ -1051,6 +1489,8 @@ export function PinPointEditor({
                     aria-label={`Pin hole ${point.label}${isPending ? ' (click again to remove)' : ''}${isLinkSelected ? ' (selected for linking)' : ''}`}
                     onPointerDown={(event) => {
                       if (eraseMode) return
+                      if (copyMode) return
+                      if (transformMode) return
                       event.stopPropagation()
                       handlePinClick(point.id)
                     }}
