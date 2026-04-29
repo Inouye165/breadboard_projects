@@ -869,29 +869,15 @@ export function WireEditor({
             />
             {/*
               Reusable visual assets for the glossy 3D jumper-wire look:
-                - wire-editor__shadow: soft drop shadow under the wire so it
-                  reads as raised above the breadboard.
                 - wire-editor__silver-cap: vertical metallic gradient applied
                   to the small endpoint pins to mimic shiny tinned metal.
+              (We render the wire's drop shadow as an offset darker
+              polyline rather than via an SVG <filter>, because the
+              default filter region uses objectBoundingBox which collapses
+              to zero size for perfectly horizontal/vertical strokes,
+              causing the wire to disappear.)
             */}
             <defs>
-              <filter
-                id="wire-editor__shadow"
-                x="-20%"
-                y="-20%"
-                width="140%"
-                height="140%"
-              >
-                <feGaussianBlur in="SourceAlpha" stdDeviation={1.5} />
-                <feOffset dx={0.6} dy={1.2} result="off" />
-                <feComponentTransfer>
-                  <feFuncA type="linear" slope={0.55} />
-                </feComponentTransfer>
-                <feMerge>
-                  <feMergeNode />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
               <linearGradient
                 id="wire-editor__silver-cap"
                 x1="0"
@@ -1191,56 +1177,71 @@ export function WireEditor({
               const endpoints = [vertices[0], vertices[vertices.length - 1]]
               return (
                 <g key={wire.id}>
-                  <g filter="url(#wire-editor__shadow)">
-                    {/* dark outer rim – the underside of the cylinder */}
-                    <polyline
-                      points={points}
-                      fill="none"
-                      stroke={edgeColor}
-                      strokeWidth={edgeWidth}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      pointerEvents="none"
-                      aria-hidden="true"
-                    />
-                    {/* main colored body – click target, full opacity */}
-                    <polyline
-                      className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
-                      points={points}
-                      fill="none"
-                      stroke={wireUserColor}
-                      strokeWidth={bodyWidth}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      role="button"
-                      aria-label={ariaLabel}
-                      onClick={() => handleWireClick(wire.id)}
-                    />
-                    {/* mid-tone shading just inside the rim for roundness */}
-                    <polyline
-                      points={points}
-                      fill="none"
-                      stroke={rimColor}
-                      strokeWidth={rimWidth}
-                      strokeOpacity={0.18}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      pointerEvents="none"
-                      aria-hidden="true"
-                    />
-                    {/* bright specular highlight – the glossy top */}
-                    <polyline
-                      points={points}
-                      fill="none"
-                      stroke={highlightColor}
-                      strokeWidth={highlightWidth}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeOpacity={0.95}
-                      pointerEvents="none"
-                      aria-hidden="true"
-                    />
-                  </g>
+                  {/* offset shadow polyline – mimics a soft drop shadow without
+                      using an SVG <filter> (which would collapse for perfectly
+                      horizontal or vertical wires whose bbox has zero height
+                      or width). */}
+                  <polyline
+                    points={vertices
+                      .map((v) => `${v.x + 0.8},${v.y + 1.6}`)
+                      .join(' ')}
+                    fill="none"
+                    stroke="#000000"
+                    strokeOpacity={0.35}
+                    strokeWidth={edgeWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                  {/* dark outer rim – the underside of the cylinder */}
+                  <polyline
+                    points={points}
+                    fill="none"
+                    stroke={edgeColor}
+                    strokeWidth={edgeWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                  {/* main colored body – click target, full opacity */}
+                  <polyline
+                    className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
+                    points={points}
+                    fill="none"
+                    stroke={wireUserColor}
+                    strokeWidth={bodyWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    role="button"
+                    aria-label={ariaLabel}
+                    onClick={() => handleWireClick(wire.id)}
+                  />
+                  {/* mid-tone shading just inside the rim for roundness */}
+                  <polyline
+                    points={points}
+                    fill="none"
+                    stroke={rimColor}
+                    strokeWidth={rimWidth}
+                    strokeOpacity={0.18}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                  {/* bright specular highlight – the glossy top */}
+                  <polyline
+                    points={points}
+                    fill="none"
+                    stroke={highlightColor}
+                    strokeWidth={highlightWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeOpacity={0.95}
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
                   {/* metallic silver pin caps with crimp band */}
                   {endpoints.map((pt, i) => (
                     <g key={`wire-cap-${wire.id}-${i}`} pointerEvents="none" aria-hidden="true">
