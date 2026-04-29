@@ -117,6 +117,9 @@ export function ModuleWorkspace({
   const [gridLinkRows, setGridLinkRows] = useState(false)
   const [gridLinkCols, setGridLinkCols] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [eraseMode, setEraseMode] = useState(false)
+  const [eraseRect, setEraseRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const [eraseDragging, setEraseDragging] = useState(false)
 
   const effectiveViewId = part.imageViews.find((v) => v.id === activeViewId)?.id ?? part.imageViews[0]?.id ?? ''
   const activeView = effectiveViewId ? findImageView(part, effectiveViewId) : undefined
@@ -257,6 +260,7 @@ export function ModuleWorkspace({
   }
 
   function handleStageClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (eraseMode) return
     if (!activeView) return
     const target = event.target as HTMLElement | null
     if (target?.dataset?.physicalPointId) return
@@ -303,6 +307,57 @@ export function ModuleWorkspace({
 
   function handleRemovePoint(pointId: string) {
     pushPart({ ...part, physicalPoints: part.physicalPoints.filter((p) => p.id !== pointId) })
+  }
+
+  function handleClearAllPoints() {
+    if (pointsForView.length === 0) return
+    pushPart({ ...part, physicalPoints: part.physicalPoints.filter((p) => p.viewId !== effectiveViewId) })
+  }
+
+  function imageCoordsFromPointerEvent(event: React.PointerEvent<HTMLDivElement>, view: PartImageView): ImagePoint | null {
+    const stage = stageRef.current
+    if (!stage) return null
+    const rect = stage.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return null
+    const u = (event.clientX - rect.left) / rect.width
+    const v = (event.clientY - rect.top) / rect.height
+    return { x: u * view.imageWidth, y: v * view.imageHeight }
+  }
+
+  function handleErasePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (!eraseMode || !activeView || event.button !== 0) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const imagePoint = imageCoordsFromPointerEvent(event, activeView)
+    if (!imagePoint) return
+    setEraseDragging(true)
+    setEraseRect({ x1: imagePoint.x, y1: imagePoint.y, x2: imagePoint.x, y2: imagePoint.y })
+  }
+
+  function handleErasePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    if (!eraseMode || !eraseDragging || !activeView) return
+    const imagePoint = imageCoordsFromPointerEvent(event, activeView)
+    if (!imagePoint) return
+    setEraseRect((prev) => (prev ? { ...prev, x2: imagePoint.x, y2: imagePoint.y } : null))
+  }
+
+  function handleErasePointerUp() {
+    if (!eraseMode || !eraseDragging || !eraseRect || !calibration || !activeView) return
+    setEraseDragging(false)
+    const minX = Math.min(eraseRect.x1, eraseRect.x2)
+    const maxX = Math.max(eraseRect.x1, eraseRect.x2)
+    const minY = Math.min(eraseRect.y1, eraseRect.y2)
+    const maxY = Math.max(eraseRect.y1, eraseRect.y2)
+    const toRemove = new Set(
+      pointsForView
+        .filter((p) => {
+          const px = mmToImagePoint(calibration, { xMm: p.xMm, yMm: p.yMm })
+          return px.x >= minX && px.x <= maxX && px.y >= minY && px.y <= maxY
+        })
+        .map((p) => p.id),
+    )
+    setEraseRect(null)
+    if (toRemove.size === 0) return
+    pushPart({ ...part, physicalPoints: part.physicalPoints.filter((p) => !toRemove.has(p.id)) })
   }
 
   function handleCommitPinRow() {
@@ -622,10 +677,37 @@ export function ModuleWorkspace({
               onClick={() => {
                 setStageMode('pin-grid')
                 setPinRowAnchors([])
+                setEraseMode(false)
+                setEraseRect(null)
               }}
               disabled={!calibration}
             >
               4. Pin grid helper
+            </button>
+            <button
+              type="button"
+              className={`action-button${eraseMode ? '' : ' action-button--ghost'}`}
+              onClick={() => {
+                if (eraseMode) {
+                  setEraseMode(false)
+                  setEraseRect(null)
+                } else {
+                  setEraseMode(true)
+                  setEraseRect(null)
+                }
+              }}
+              disabled={!calibration}
+              aria-pressed={eraseMode}
+            >
+              {eraseMode ? 'Cancel erase' : 'Erase area'}
+            </button>
+            <button
+              type="button"
+              className="action-button action-button--ghost"
+              onClick={handleClearAllPoints}
+              disabled={pointsForView.length === 0}
+            >
+              Clear all pins
             </button>
           </div>
 
@@ -753,10 +835,13 @@ export function ModuleWorkspace({
               tabIndex={0}
               aria-label={`Module image stage (${stageMode})`}
               onClick={handleStageClick}
+              onPointerDown={handleErasePointerDown}
+              onPointerMove={handleErasePointerMove}
+              onPointerUp={handleErasePointerUp}
               style={{
                 position: 'relative',
                 display: 'inline-block',
-                cursor: 'crosshair',
+                cursor: eraseMode ? 'crosshair' : 'crosshair',
                 userSelect: 'none',
                 maxWidth: '100%',
               }}
@@ -766,6 +851,22 @@ export function ModuleWorkspace({
                 alt={`${activeView.label} of ${part.name}`}
                 style={{ display: 'block', maxWidth: '100%' }}
               />
+              {eraseMode && eraseRect ? (
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: 'absolute',
+                    left: `${(Math.min(eraseRect.x1, eraseRect.x2) / activeView.imageWidth) * 100}%`,
+                    top: `${(Math.min(eraseRect.y1, eraseRect.y2) / activeView.imageHeight) * 100}%`,
+                    width: `${(Math.abs(eraseRect.x2 - eraseRect.x1) / activeView.imageWidth) * 100}%`,
+                    height: `${(Math.abs(eraseRect.y2 - eraseRect.y1) / activeView.imageHeight) * 100}%`,
+                    background: 'rgba(239, 68, 68, 0.2)',
+                    border: '2px dashed #ef4444',
+                    pointerEvents: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              ) : null}
               {calibration ? (
                 <CalibrationOverlay view={activeView} calibration={calibration} />
               ) : null}
@@ -783,6 +884,7 @@ export function ModuleWorkspace({
                         aria-label={`Physical point ${point.id} (${point.kind}${linkedPin ? `, ${linkedPin.name}` : ''})`}
                         title={`${POINT_KIND_LABELS[point.kind]}${linkedPin ? ` - ${linkedPin.name}` : ''} @ ${point.xMm.toFixed(2)}, ${point.yMm.toFixed(2)} mm`}
                         onClick={(event) => {
+                          if (eraseMode) return
                           event.stopPropagation()
                           handleRemovePoint(point.id)
                         }}

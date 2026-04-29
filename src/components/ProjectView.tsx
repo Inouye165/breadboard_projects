@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 
 import type { BreadboardDefinition, ConnectionPoint } from '../lib/breadboardDefinitionModel'
 import type {
@@ -11,6 +11,8 @@ import { estimatePixelsPerMm } from '../lib/breadboardScale'
 import {
   computeAlignedBreadboardPinIds,
   computeCoveredBreadboardPinIds,
+  computeElectricalGroups,
+  computeElectricallyConnectedPinIds,
 } from '../lib/modulePinAlignment'
 import type { LibraryPartDefinition } from '../lib/partLibraryModel'
 
@@ -45,6 +47,7 @@ function describeComponent(component: ProjectComponent) {
 }
 
 export function ProjectView({ project, breadboard, libraryParts = [], status, onBack, onEdit }: ProjectViewProps) {
+  const [showRails, setShowRails] = useState(false)
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
   const pixelsPerMm = useMemo(() => estimatePixelsPerMm(breadboard), [breadboard])
@@ -93,7 +96,6 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
   }, [components])
 
   const radius = Math.max(3, Math.min(safeWidth, safeHeight) * 0.004)
-  const alignedRadius = radius * 2
   const strokeWidth = Math.max(3, radius * 0.6)
   const alignedPinIds = useMemo(
     () => computeAlignedBreadboardPinIds(modules, libraryPartIndex, breadboard.points, pixelsPerMm),
@@ -102,6 +104,14 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
   const coveredPinIds = useMemo(
     () => computeCoveredBreadboardPinIds(modules, libraryPartIndex, breadboard.points, pixelsPerMm),
     [modules, libraryPartIndex, breadboard.points, pixelsPerMm],
+  )
+  const connectedPinIds = useMemo(
+    () => computeElectricallyConnectedPinIds(alignedPinIds, breadboard, project.wires),
+    [alignedPinIds, breadboard, project.wires],
+  )
+  const electricalGroups = useMemo(
+    () => (showRails ? computeElectricalGroups(breadboard, project.wires) : []),
+    [showRails, breadboard, project.wires],
   )
 
   return (
@@ -113,6 +123,14 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
           <p className="image-workspace__status">{status}</p>
         </div>
         <div className="pin-editor__actions">
+          <label className="pin-editor__toggle">
+            <input
+              type="checkbox"
+              checked={showRails}
+              onChange={(event) => setShowRails(event.target.checked)}
+            />
+            Show rails
+          </label>
           <button type="button" className="action-button action-button--ghost" onClick={onBack}>
             Back to projects
           </button>
@@ -139,6 +157,46 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
                 height={safeHeight}
                 preserveAspectRatio="none"
               />
+              {showRails ? (
+                <g className="project-view__rails" aria-hidden="true">
+                  {electricalGroups.map((group, groupIndex) => {
+                    if (group.size < 2) {
+                      return null
+                    }
+                    const pts = breadboard.points.filter((p) => group.has(p.id))
+                    if (pts.length < 2) {
+                      return null
+                    }
+                    const xs = pts.map((p) => p.x)
+                    const ys = pts.map((p) => p.y)
+                    const xRange = Math.max(...xs) - Math.min(...xs)
+                    const yRange = Math.max(...ys) - Math.min(...ys)
+                    const sorted = [...pts].sort((a, b) =>
+                      xRange >= yRange ? a.x - b.x : a.y - b.y,
+                    )
+                    const groupKey = sorted.map((p) => p.id).join('|') || `g-${groupIndex}`
+                    let hash = 0
+                    for (let i = 0; i < groupKey.length; i += 1) {
+                      hash = (hash * 31 + groupKey.charCodeAt(i)) >>> 0
+                    }
+                    const palette = ['#1f5fcc', '#cc3333', '#1f8e4d', '#e08a00', '#7a3fc6', '#0a8a8a', '#b8338a', '#5a6f00']
+                    const color = palette[hash % palette.length]
+                    const pointsAttr = sorted.map((p) => `${p.x},${p.y}`).join(' ')
+                    return (
+                      <polyline
+                        key={`rail-${groupIndex}`}
+                        points={pointsAttr}
+                        fill="none"
+                        stroke={color}
+                        strokeWidth={Math.max(2, radius * 1.4)}
+                        strokeOpacity={0.35}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )
+                  })}
+                </g>
+              ) : null}
               {modules.map((instance) => {
                 const part = libraryPartIndex.get(instance.libraryPartId)
 
@@ -201,6 +259,7 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
               ))}
               {breadboard.points.map((point) => {
                 const isAligned = alignedPinIds.has(point.id)
+                const isConnected = connectedPinIds.has(point.id)
                 const isCovered = coveredPinIds.has(point.id)
                 if (isCovered && !isAligned) {
                   return null
@@ -208,13 +267,13 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
                 return (
                   <circle
                     key={point.id}
-                    className={`pin-editor__pin project-view__pin${isAligned ? ' project-view__pin--aligned' : ''}`}
+                    className={`pin-editor__pin project-view__pin${isAligned ? ' project-view__pin--aligned' : ''}${isConnected && !isAligned ? ' project-view__pin--connected' : ''}`}
                     cx={point.x}
                     cy={point.y}
-                    r={isAligned ? alignedRadius : radius}
-                    fill={isAligned ? '#facc15' : undefined}
-                    stroke={isAligned ? '#a16207' : undefined}
-                    aria-label={`Pin hole ${point.label}${isAligned ? ' (module pin aligned)' : ''}`}
+                    r={radius}
+                    fill={isConnected ? '#facc15' : undefined}
+                    stroke={isConnected ? '#a16207' : undefined}
+                    aria-label={`Pin hole ${point.label}${isAligned ? ' (module pin aligned)' : isConnected ? ' (electrically connected to module pin)' : ''}`}
                   />
                 )
               })}
