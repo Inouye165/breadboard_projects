@@ -33,6 +33,52 @@ import {
 
 const WIRE_COLORS = ['#cc3333', '#1f8e4d', '#1f5fcc', '#e08a00', '#7a3fc6', '#000000']
 
+/** Parse a #rgb or #rrggbb hex color into [r,g,b] (0-255). Returns null for unknown formats. */
+function parseHexColor(hex: string): [number, number, number] | null {
+  const m = hex.trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i)
+  if (!m) {
+    return null
+  }
+  let value = m[1]
+  if (value.length === 3) {
+    value = value.split('').map((c) => c + c).join('')
+  }
+  const num = parseInt(value, 16)
+  return [(num >> 16) & 0xff, (num >> 8) & 0xff, num & 0xff]
+}
+
+function clampByte(n: number) {
+  return Math.max(0, Math.min(255, Math.round(n)))
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const h = (n: number) => clampByte(n).toString(16).padStart(2, '0')
+  return `#${h(r)}${h(g)}${h(b)}`
+}
+
+/** Mix `color` toward black by `amount` in [0,1]. */
+function shadeDarken(color: string, amount: number): string {
+  const rgb = parseHexColor(color)
+  if (!rgb) {
+    return color
+  }
+  const k = 1 - amount
+  return rgbToHex(rgb[0] * k, rgb[1] * k, rgb[2] * k)
+}
+
+/** Mix `color` toward white by `amount` in [0,1]. */
+function shadeLighten(color: string, amount: number): string {
+  const rgb = parseHexColor(color)
+  if (!rgb) {
+    return color
+  }
+  return rgbToHex(
+    rgb[0] + (255 - rgb[0]) * amount,
+    rgb[1] + (255 - rgb[1]) * amount,
+    rgb[2] + (255 - rgb[2]) * amount,
+  )
+}
+
 const RAIL_COLORS = [
   '#1f5fcc',
   '#cc3333',
@@ -1076,43 +1122,82 @@ export function WireEditor({
               const points = vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ')
               // A wire is "live" when either of its endpoints is connected to
               // a module pin (directly aligned or transitively via rails and
-              // other wires). Live wires get a dashed yellow stripe overlay
-              // so the entire signal path (live rail → live wire → live rail
-              // → module pin) reads as one continuous lit path. The wire's
-              // own user color stays as the base stroke so different wires
-              // remain distinguishable.
+              // other wires). Used only for the aria-label hint today.
               const isLiveWire =
                 connectedPinIds.has(wire.fromPointId) || connectedPinIds.has(wire.toPointId)
-              const liveStrokeWidth = isPending ? strokeWidth * 1.6 : strokeWidth
-              const wireUserColor = wire.color ?? '#222'
-
+              const wireUserColor = wire.color ?? '#cc3333'
+              // Render the wire as a stack of three concentric strokes to
+              // emulate a glossy round breadboard jumper wire (the solid
+              // kind with rigid plastic insulation, not the floppy
+              // male/female ribbon kind):
+              //   1. shadow/edge: a darker, slightly wider stroke gives
+              //      the wire a dark rim that reads as the underside of a
+              //      cylinder.
+              //   2. body: the user-chosen color at full width.
+              //   3. specular highlight: a thin, lightened stroke down the
+              //      center suggests a glossy curved surface catching
+              //      overhead light.
+              // Pending-deletion state widens everything proportionally.
+              const bodyWidth = isPending ? strokeWidth * 1.6 : strokeWidth
+              const edgeWidth = bodyWidth * 1.35
+              const highlightWidth = Math.max(0.8, bodyWidth * 0.35)
+              const edgeColor = shadeDarken(wireUserColor, 0.55)
+              const highlightColor = shadeLighten(wireUserColor, 0.55)
+              const ariaLabel = `Wire from ${fromPoint.label} to ${toPoint.label}${
+                isPending ? ' (click again to delete)' : ''
+              }${isLiveWire ? ' (live)' : ''}`
+              // Endpoint metal caps: small grey discs imply the wire's
+              // rigid pin connectors plugged into the breadboard hole.
+              const capRadius = Math.max(1.5, bodyWidth * 0.55)
+              const endpoints = [vertices[0], vertices[vertices.length - 1]]
               return (
                 <g key={wire.id}>
+                  <polyline
+                    points={points}
+                    fill="none"
+                    stroke={edgeColor}
+                    strokeWidth={edgeWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
                   <polyline
                     className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
                     points={points}
                     fill="none"
                     stroke={wireUserColor}
-                    strokeWidth={liveStrokeWidth}
+                    strokeWidth={bodyWidth}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     role="button"
-                    aria-label={`Wire from ${fromPoint.label} to ${toPoint.label}${isPending ? ' (click again to delete)' : ''}${isLiveWire ? ' (live)' : ''}`}
+                    aria-label={ariaLabel}
                     onClick={() => handleWireClick(wire.id)}
                   />
-                  {isLiveWire ? (
-                    <polyline
-                      points={points}
-                      fill="none"
-                      stroke="#facc15"
-                      strokeWidth={Math.max(1, liveStrokeWidth * 0.45)}
-                      strokeDasharray={`${liveStrokeWidth * 1.2} ${liveStrokeWidth * 1.2}`}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                  <polyline
+                    points={points}
+                    fill="none"
+                    stroke={highlightColor}
+                    strokeWidth={highlightWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeOpacity={0.85}
+                    pointerEvents="none"
+                    aria-hidden="true"
+                  />
+                  {endpoints.map((pt, i) => (
+                    <circle
+                      key={`wire-cap-${wire.id}-${i}`}
+                      cx={pt.x}
+                      cy={pt.y}
+                      r={capRadius}
+                      fill="#9aa0a6"
+                      stroke="#3a3f44"
+                      strokeWidth={0.6}
                       pointerEvents="none"
                       aria-hidden="true"
                     />
-                  ) : null}
+                  ))}
                 </g>
               )
             })}
