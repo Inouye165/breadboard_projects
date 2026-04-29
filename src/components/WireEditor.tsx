@@ -16,8 +16,13 @@ import {
 } from '../lib/breadboardProjectModel'
 import { estimatePixelsPerMm } from '../lib/breadboardScale'
 import {
+  ALIGNMENT_THRESHOLD_MM,
   computeAlignedBreadboardPinIds,
   computeCoveredBreadboardPinIds,
+  computeElectricalGroups,
+  computeElectricallyConnectedPinIds,
+  getPhysicalPointModuleOffsetPx,
+  getViewForPoint,
 } from '../lib/modulePinAlignment'
 import {
   PART_CATEGORIES,
@@ -27,6 +32,25 @@ import {
 } from '../lib/partLibraryModel'
 
 const WIRE_COLORS = ['#cc3333', '#1f8e4d', '#1f5fcc', '#e08a00', '#7a3fc6', '#000000']
+
+const RAIL_COLORS = [
+  '#1f5fcc',
+  '#cc3333',
+  '#1f8e4d',
+  '#e08a00',
+  '#7a3fc6',
+  '#0a8a8a',
+  '#b8338a',
+  '#5a6f00',
+]
+
+function railColorFor(groupKey: string) {
+  let hash = 0
+  for (let index = 0; index < groupKey.length; index += 1) {
+    hash = (hash * 31 + groupKey.charCodeAt(index)) >>> 0
+  }
+  return RAIL_COLORS[hash % RAIL_COLORS.length]
+}
 
 /** Snap threshold in millimeters. One standard 0.1" pin pitch = 2.54 mm. */
 const SNAP_THRESHOLD_MM = 1.3
@@ -95,8 +119,6 @@ function computeSnapResult(
   breadboardPoints: ConnectionPoint[],
   snapThresholdPx: number,
 ): SnapResult {
-  const widthPx = part.dimensions.widthMm * pixelsPerMm
-  const heightPx = part.dimensions.heightMm * pixelsPerMm
   const angleRad = (rotationDeg * Math.PI) / 180
   const cosA = Math.cos(angleRad)
   const sinA = Math.sin(angleRad)
@@ -107,13 +129,9 @@ function computeSnapResult(
   let bestPinId: string | null = null
 
   for (const physPt of snapPoints) {
-    // Offset from module center in pixel space (pre-rotation)
-    const dx = physPt.xMm * pixelsPerMm - widthPx / 2
-    const dy = physPt.yMm * pixelsPerMm - heightPx / 2
-    // Apply rotation around module center
+    const { dx, dy } = getPhysicalPointModuleOffsetPx(physPt, part, pixelsPerMm)
     const rotDx = dx * cosA - dy * sinA
     const rotDy = dx * sinA + dy * cosA
-    // Absolute canvas position of this physical point
     const absX = candidateCenter.x + rotDx
     const absY = candidateCenter.y + rotDy
 
@@ -173,6 +191,7 @@ export function WireEditor({
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null)
   const [moduleDragState, setModuleDragState] = useState<ModuleDragState | null>(null)
   const [showPinLabels, setShowPinLabels] = useState(false)
+  const [showRails, setShowRails] = useState(false)
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
   const pixelsPerMm = useMemo(() => estimatePixelsPerMm(breadboard), [breadboard])
@@ -647,10 +666,14 @@ export function WireEditor({
   }
 
   const radius = Math.max(3, Math.min(safeWidth, safeHeight) * 0.004)
-  const alignedRadius = radius * 2
   const strokeWidth = Math.max(3, radius * 0.6)
   const handleRadius = Math.max(5, radius * 0.85)
   const midpointRadius = Math.max(4, radius * 0.65)
+  const modulePointRadius = Math.max(2.5, radius * 0.7)
+  const modulePointAlignThresholdSq = useMemo(
+    () => (ALIGNMENT_THRESHOLD_MM * pixelsPerMm) ** 2,
+    [pixelsPerMm],
+  )
 
   const effectiveModules = useMemo(() => {
     if (!moduleDragState) {
@@ -672,6 +695,51 @@ export function WireEditor({
     () => computeCoveredBreadboardPinIds(effectiveModules, libraryPartIndex, breadboard.points, pixelsPerMm),
     [effectiveModules, libraryPartIndex, breadboard.points, pixelsPerMm],
   )
+  const connectedPinIds = useMemo(
+    () => computeElectricallyConnectedPinIds(alignedPinIds, breadboard, project.wires),
+    [alignedPinIds, breadboard, project.wires],
+  )
+  // Rails depict only the breadboard's intrinsic conductive strips; user
+  // wires are rendered separately and would otherwise produce long diagonal
+  // polylines spanning two unrelated regions of the board.
+  const intrinsicElectricalGroups = useMemo(
+    () => computeElectricalGroups(breadboard, []),
+    [breadboard],
+  )
+  const electricalGroups = showRails ? intrinsicElectricalGroups : []
+  // "Live" rails: any intrinsic rail that contains at least one breadboard
+  // hole currently energised by an aligned module pin (transitively, through
+  // user wires too). These are always highlighted, even when `Show rails` is
+  // off, so the user can see the path of an active connection.
+  const liveRailGroups = useMemo(
+    () =>
+      intrinsicElectricalGroups.filter((group) => {
+        for (const pinId of group) {
+          if (connectedPinIds.has(pinId)) {
+            return true
+          }
+        }
+        return false
+      }),
+    [intrinsicElectricalGroups, connectedPinIds],
+  )
+  // Map every breadboard pin that is the endpoint of a user wire to that
+  // wire's display color. Used to color the "active path" segment of a rail
+  // (from the module pin out to the wire attachment hole) so the eye can
+  // follow one continuous wire-colored path through the circuit.
+  const wireEndpointColors = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const wire of project.wires) {
+      const color = wire.color ?? '#cc3333'
+      if (!map.has(wire.fromPointId)) {
+        map.set(wire.fromPointId, color)
+      }
+      if (!map.has(wire.toPointId)) {
+        map.set(wire.toPointId, color)
+      }
+    }
+    return map
+  }, [project.wires])
 
   return (
     <section className="wire-editor" aria-label="Wire breadboard">
@@ -721,6 +789,14 @@ export function WireEditor({
               />
               Show pin labels
             </label>
+            <label className="pin-editor__toggle">
+              <input
+                type="checkbox"
+                checked={showRails}
+                onChange={(event) => setShowRails(event.target.checked)}
+              />
+              Show rails
+            </label>
           </div>
         </div>
       </header>
@@ -745,6 +821,137 @@ export function WireEditor({
               height={safeHeight}
               preserveAspectRatio="none"
             />
+            {showRails ? (
+              <g className="wire-editor__rails" aria-hidden="true">
+                {electricalGroups.map((group, groupIndex) => {
+                  if (group.size < 2) {
+                    return null
+                  }
+                  const pts = breadboard.points.filter((p) => group.has(p.id))
+                  if (pts.length < 2) {
+                    return null
+                  }
+                  // Sort along the dominant axis so the polyline traces the rail.
+                  const xs = pts.map((p) => p.x)
+                  const ys = pts.map((p) => p.y)
+                  const xRange = Math.max(...xs) - Math.min(...xs)
+                  const yRange = Math.max(...ys) - Math.min(...ys)
+                  const sorted = [...pts].sort((a, b) =>
+                    xRange >= yRange ? a.x - b.x : a.y - b.y,
+                  )
+                  const groupKey = sorted.map((p) => p.id).join('|') || `g-${groupIndex}`
+                  const color = railColorFor(groupKey)
+                  const points = sorted.map((p) => `${p.x},${p.y}`).join(' ')
+                  return (
+                    <polyline
+                      key={`rail-${groupIndex}`}
+                      points={points}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={Math.max(2, radius * 1.4)}
+                      strokeOpacity={0.35}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  )
+                })}
+              </g>
+            ) : null}
+            {/*
+              Live rails: a connected module pin energises the entire rail it
+              plugs into. We split each rail into two visual zones:
+                - "active path" (wire color): from the module pin hole out to
+                  the farthest hole that has a wire endpoint. This is the
+                  segment of the rail that actually carries the signal to the
+                  attached wire, so it reads as one continuous colored path
+                  with the wire itself.
+                - "stub" (green): the remaining holes on the rail that are
+                  electrically the same net but lie beyond the wire
+                  attachment. They are still "live" but not part of the
+                  current path, so they stay green.
+              If the rail has no wire endpoint on it, the entire rail is
+              drawn green (it's energised but no wire is yet using it).
+            */}
+            <g className="wire-editor__live-rails" aria-hidden="true">
+              {liveRailGroups.map((group, groupIndex) => {
+                if (group.size < 2) {
+                  return null
+                }
+                const pts = breadboard.points.filter((p) => group.has(p.id))
+                if (pts.length < 2) {
+                  return null
+                }
+                const xs = pts.map((p) => p.x)
+                const ys = pts.map((p) => p.y)
+                const xRange = Math.max(...xs) - Math.min(...xs)
+                const yRange = Math.max(...ys) - Math.min(...ys)
+                const sorted = [...pts].sort((a, b) =>
+                  xRange >= yRange ? a.x - b.x : a.y - b.y,
+                )
+                const baseWidth = Math.max(2.5, radius * 1.5)
+                const stubColor = '#22c55e'
+                const renderPolyline = (
+                  segPts: typeof sorted,
+                  color: string,
+                  keySuffix: string,
+                ) => {
+                  if (segPts.length < 2) {
+                    return null
+                  }
+                  const points = segPts.map((p) => `${p.x},${p.y}`).join(' ')
+                  return (
+                    <polyline
+                      key={`live-rail-${groupIndex}-${keySuffix}`}
+                      points={points}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={baseWidth}
+                      strokeOpacity={0.85}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  )
+                }
+                const modulePinIdx: number[] = []
+                const wireEndpointIdx: number[] = []
+                let activeColor: string | undefined
+                for (let i = 0; i < sorted.length; i += 1) {
+                  const id = sorted[i].id
+                  if (alignedPinIds.has(id)) {
+                    modulePinIdx.push(i)
+                  }
+                  const wireColor = wireEndpointColors.get(id)
+                  if (wireColor !== undefined) {
+                    wireEndpointIdx.push(i)
+                    if (activeColor === undefined) {
+                      activeColor = wireColor
+                    }
+                  }
+                }
+                // No wire attached to this rail: render the whole rail as a
+                // green "live but unused" stub (preserves prior behavior).
+                if (wireEndpointIdx.length === 0 || activeColor === undefined) {
+                  return (
+                    <g key={`live-rail-${groupIndex}`}>
+                      {renderPolyline(sorted, stubColor, 'all')}
+                    </g>
+                  )
+                }
+                const spanIdx = [...modulePinIdx, ...wireEndpointIdx]
+                const activeMin = Math.min(...spanIdx)
+                const activeMax = Math.max(...spanIdx)
+                const activeSeg = sorted.slice(activeMin, activeMax + 1)
+                const leftStub = sorted.slice(0, activeMin + 1)
+                const rightStub = sorted.slice(activeMax)
+                return (
+                  <g key={`live-rail-${groupIndex}`}>
+                    {renderPolyline(leftStub, stubColor, 'stub-l')}
+                    {renderPolyline(rightStub, stubColor, 'stub-r')}
+                    {renderPolyline(activeSeg, activeColor, 'active')}
+                  </g>
+                )
+              })}
+            </g>
             {modules.map((instance) => {
               const part = libraryPartIndex.get(instance.libraryPartId)
 
@@ -808,6 +1015,55 @@ export function WireEditor({
                 </g>
               )
             })}
+            {effectiveModules.flatMap((instance) => {
+              const part = libraryPartIndex.get(instance.libraryPartId)
+              if (!part) {
+                return []
+              }
+              const widthPx = part.dimensions.widthMm * pixelsPerMm
+              const heightPx = part.dimensions.heightMm * pixelsPerMm
+              if (widthPx <= 0 || heightPx <= 0) {
+                return []
+              }
+              const angleRad = (instance.rotationDeg * Math.PI) / 180
+              const cosA = Math.cos(angleRad)
+              const sinA = Math.sin(angleRad)
+              const activeViewId = instance.viewId ?? part.imageViews[0]?.id
+              return part.physicalPoints
+                .filter((p) => isSnapPoint(p) && (!activeViewId || getViewForPoint(part, p)?.id === activeViewId))
+                .map((physPt) => {
+                  const { dx, dy } = getPhysicalPointModuleOffsetPx(physPt, part, pixelsPerMm)
+                  const rotDx = dx * cosA - dy * sinA
+                  const rotDy = dx * sinA + dy * cosA
+                  const absX = instance.centerX + rotDx
+                  const absY = instance.centerY + rotDy
+                  let aligned = false
+                  for (const bp of breadboard.points) {
+                    if ((bp.x - absX) ** 2 + (bp.y - absY) ** 2 <= modulePointAlignThresholdSq) {
+                      aligned = true
+                      break
+                    }
+                  }
+                  // Yellow when this module pin is in the air, green when it
+                  // sits over a breadboard hole (i.e. plugged in).
+                  const fillColor = aligned ? '#22c55e' : '#facc15'
+                  const strokeColor = aligned ? '#0e2a14' : '#a16207'
+                  return (
+                    <circle
+                      key={`module-pt-${instance.id}-${physPt.id}`}
+                      className={`wire-editor__module-point${aligned ? ' wire-editor__module-point--aligned' : ''}`}
+                      cx={absX}
+                      cy={absY}
+                      r={modulePointRadius}
+                      fill={fillColor}
+                      stroke={strokeColor}
+                      strokeWidth={1}
+                      pointerEvents="none"
+                      aria-hidden="true"
+                    />
+                  )
+                })
+            })}
             {wireSegments.map(({ wire, fromPoint, toPoint }) => {
               const isPending = pendingRemovalWireId === wire.id
               const baseVertices = getWireVertices(wire, fromPoint, toPoint)
@@ -818,21 +1074,46 @@ export function WireEditor({
                     )
                   : baseVertices
               const points = vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ')
+              // A wire is "live" when either of its endpoints is connected to
+              // a module pin (directly aligned or transitively via rails and
+              // other wires). Live wires get a dashed yellow stripe overlay
+              // so the entire signal path (live rail → live wire → live rail
+              // → module pin) reads as one continuous lit path. The wire's
+              // own user color stays as the base stroke so different wires
+              // remain distinguishable.
+              const isLiveWire =
+                connectedPinIds.has(wire.fromPointId) || connectedPinIds.has(wire.toPointId)
+              const liveStrokeWidth = isPending ? strokeWidth * 1.6 : strokeWidth
+              const wireUserColor = wire.color ?? '#222'
 
               return (
-                <polyline
-                  key={wire.id}
-                  className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
-                  points={points}
-                  fill="none"
-                  stroke={wire.color ?? '#222'}
-                  strokeWidth={isPending ? strokeWidth * 1.6 : strokeWidth}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  role="button"
-                  aria-label={`Wire from ${fromPoint.label} to ${toPoint.label}${isPending ? ' (click again to delete)' : ''}`}
-                  onClick={() => handleWireClick(wire.id)}
-                />
+                <g key={wire.id}>
+                  <polyline
+                    className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
+                    points={points}
+                    fill="none"
+                    stroke={wireUserColor}
+                    strokeWidth={liveStrokeWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    role="button"
+                    aria-label={`Wire from ${fromPoint.label} to ${toPoint.label}${isPending ? ' (click again to delete)' : ''}${isLiveWire ? ' (live)' : ''}`}
+                    onClick={() => handleWireClick(wire.id)}
+                  />
+                  {isLiveWire ? (
+                    <polyline
+                      points={points}
+                      fill="none"
+                      stroke="#facc15"
+                      strokeWidth={Math.max(1, liveStrokeWidth * 0.45)}
+                      strokeDasharray={`${liveStrokeWidth * 1.2} ${liveStrokeWidth * 1.2}`}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      pointerEvents="none"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                </g>
               )
             })}
             {wireSegments.flatMap(({ wire, fromPoint, toPoint }) => {
@@ -909,11 +1190,18 @@ export function WireEditor({
               const isPendingFrom = pendingFromPointId === point.id
               const isSnapTarget = moduleDragState?.snapPinId === point.id
               const isAligned = alignedPinIds.has(point.id)
+              const isConnected = connectedPinIds.has(point.id)
               const isCovered = coveredPinIds.has(point.id)
-              if (isCovered && !isAligned && !isPendingFrom && !isSnapTarget) {
+              // When a module pin is plugged into this hole, the module's own
+              // green pin dot serves as the visual indicator. Rendering the
+              // breadboard hole on top would just paint red over the green.
+              if (isAligned && !isPendingFrom && !isSnapTarget) {
                 return null
               }
-              const pinRadius = isAligned ? alignedRadius : radius
+              if (isCovered && !isPendingFrom && !isSnapTarget) {
+                return null
+              }
+              const pinRadius = radius
 
               return (
                 <g key={point.id} className="pin-editor__pin-group">
@@ -931,14 +1219,14 @@ export function WireEditor({
                   ) : null}
                   <circle
                     data-pin-point-id={point.id}
-                    className={`pin-editor__pin wire-editor__pin${isPendingFrom ? ' wire-editor__pin--pending-from' : ''}${isAligned ? ' wire-editor__pin--aligned' : ''}`}
+                    className={`pin-editor__pin wire-editor__pin${isPendingFrom ? ' wire-editor__pin--pending-from' : ''}${isAligned ? ' wire-editor__pin--aligned' : ''}${isConnected && !isAligned ? ' wire-editor__pin--connected' : ''}`}
                     cx={point.x}
                     cy={point.y}
                     r={pinRadius}
-                    fill={isAligned ? '#facc15' : undefined}
-                    stroke={isAligned ? '#a16207' : undefined}
+                    fill={isConnected ? '#facc15' : undefined}
+                    stroke={isConnected ? '#a16207' : undefined}
                     role="button"
-                    aria-label={`Pin hole ${point.label}${isPendingFrom ? ' (selected as wire start)' : ''}${isAligned ? ' (module pin aligned)' : ''}`}
+                    aria-label={`Pin hole ${point.label}${isPendingFrom ? ' (selected as wire start)' : ''}${isAligned ? ' (module pin aligned)' : isConnected ? ' (electrically connected to module pin)' : ''}`}
                     onClick={() => handlePinClick(point.id)}
                   >
                     {showPinLabels ? null : <title>{point.label}</title>}

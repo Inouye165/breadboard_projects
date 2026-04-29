@@ -715,6 +715,17 @@ function imageWorkspacePersistencePlugin(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), imageWorkspacePersistencePlugin()],
+  server: {
+    // Use a project-unique port so we don't collide with other Vite apps
+    // (which default to 5173). Fail fast if the port is already in use
+    // instead of silently jumping to another one.
+    port: 5817,
+    strictPort: true,
+  },
+  preview: {
+    port: 5817,
+    strictPort: true,
+  },
   test: {
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',

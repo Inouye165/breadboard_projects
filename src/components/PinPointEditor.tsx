@@ -10,6 +10,9 @@ import {
   type DefinitionRegionKind,
   type ScaleCalibration,
 } from '../lib/breadboardDefinitionModel'
+import {
+  computeElectricalGroups,
+} from '../lib/modulePinAlignment'
 import { dedupAgainstExisting, generatePinGrid, type GridPoint } from '../lib/pinGrid'
 
 type CalibrationStep =
@@ -102,6 +105,11 @@ export function PinPointEditor({
   const [gridLinkRows, setGridLinkRows] = useState(false)
   const [gridLinkCols, setGridLinkCols] = useState(true)
   const [showPinLabels, setShowPinLabels] = useState(false)
+  const [linkMode, setLinkMode] = useState(false)
+  const [linkSelection, setLinkSelection] = useState<Set<string>>(new Set())
+  const [eraseMode, setEraseMode] = useState(false)
+  const [eraseRect, setEraseRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const [eraseDragging, setEraseDragging] = useState(false)
   const safeWidth = imageWidth > 0 ? imageWidth : 1
   const safeHeight = imageHeight > 0 ? imageHeight : 1
 
@@ -110,6 +118,8 @@ export function PinPointEditor({
     setPendingRemovalId(null)
     setCalibrationStep({ kind: 'idle' })
     setGridStep({ kind: 'idle' })
+    setLinkMode(false)
+    setLinkSelection(new Set())
   }
 
   const gridPreview = useMemo(() => {
@@ -121,6 +131,11 @@ export function PinPointEditor({
       cols: gridCols,
     })
   }, [gridStep, gridRows, gridCols])
+
+  const railsOverlay = useMemo(
+    () => computeElectricalGroups(definition, []),
+    [definition],
+  )
 
   function getStageCoordinates(event: React.PointerEvent<SVGSVGElement>) {
     const svg = svgRef.current
@@ -151,7 +166,7 @@ export function PinPointEditor({
 
     const target = event.target as SVGElement | null
 
-    if (target?.dataset?.pinPointId) {
+    if (target?.dataset?.pinPointId && !eraseMode) {
       // Pin click handled separately.
       return
     }
@@ -159,6 +174,14 @@ export function PinPointEditor({
     const coordinates = getStageCoordinates(event)
 
     if (!coordinates) {
+      return
+    }
+
+    // Erase area mode: drag a rectangle to remove enclosed pins.
+    if (eraseMode) {
+      event.currentTarget.setPointerCapture(event.pointerId)
+      setEraseDragging(true)
+      setEraseRect({ x1: coordinates.x, y1: coordinates.y, x2: coordinates.x, y2: coordinates.y })
       return
     }
 
@@ -255,6 +278,19 @@ export function PinPointEditor({
   }
 
   function handlePinClick(pointId: string) {
+    if (linkMode) {
+      setLinkSelection((prev) => {
+        const next = new Set(prev)
+        if (next.has(pointId)) {
+          next.delete(pointId)
+        } else {
+          next.add(pointId)
+        }
+        return next
+      })
+      return
+    }
+
     if (pendingRemovalId === pointId) {
       onChange({
         ...definition,
@@ -282,6 +318,8 @@ export function PinPointEditor({
   function startGridFill() {
     setCalibrationStep({ kind: 'idle' })
     setGridStep({ kind: 'awaiting-first' })
+    setEraseMode(false)
+    setEraseRect(null)
   }
 
   function cancelGridFill() {
@@ -393,6 +431,155 @@ export function PinPointEditor({
     })
   }
 
+  function startLinkMode() {
+    setCalibrationStep({ kind: 'idle' })
+    setGridStep({ kind: 'idle' })
+    setPendingRemovalId(null)
+    setLinkSelection(new Set())
+    setLinkMode(true)
+    setEraseMode(false)
+    setEraseRect(null)
+  }
+
+  function cancelLinkMode() {
+    setLinkMode(false)
+    setLinkSelection(new Set())
+  }
+
+  function startEraseMode() {
+    setCalibrationStep({ kind: 'idle' })
+    setGridStep({ kind: 'idle' })
+    setLinkMode(false)
+    setLinkSelection(new Set())
+    setPendingRemovalId(null)
+    setEraseMode(true)
+    setEraseRect(null)
+  }
+
+  function cancelEraseMode() {
+    setEraseMode(false)
+    setEraseRect(null)
+    setEraseDragging(false)
+  }
+
+  function handleErasePointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (!eraseDragging) return
+    const coordinates = getStageCoordinates(event)
+    if (!coordinates) return
+    setEraseRect((prev) => (prev ? { ...prev, x2: coordinates.x, y2: coordinates.y } : null))
+  }
+
+  function handleErasePointerUp() {
+    if (!eraseDragging || !eraseRect) return
+    setEraseDragging(false)
+    const minX = Math.min(eraseRect.x1, eraseRect.x2)
+    const maxX = Math.max(eraseRect.x1, eraseRect.x2)
+    const minY = Math.min(eraseRect.y1, eraseRect.y2)
+    const maxY = Math.max(eraseRect.y1, eraseRect.y2)
+    const toRemove = new Set(
+      definition.points
+        .filter((p) => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY)
+        .map((p) => p.id),
+    )
+    setEraseRect(null)
+    if (toRemove.size === 0) return
+    const nextRegions = pruneSelectedFromExistingGroups(definition.regions, toRemove)
+    onChange({
+      ...definition,
+      points: definition.points.filter((p) => !toRemove.has(p.id)),
+      regions: nextRegions,
+    })
+  }
+
+  function pruneSelectedFromExistingGroups(
+    regions: DefinitionRegion[] | undefined,
+    selected: Set<string>,
+  ): DefinitionRegion[] | undefined {
+    if (!regions || regions.length === 0) {
+      return regions
+    }
+    const pruned = regions
+      .map((region) => ({
+        ...region,
+        pointIds: region.pointIds.filter((id) => !selected.has(id)),
+        rows: region.rows
+          .map((g) => ({ ...g, pointIds: g.pointIds.filter((id) => !selected.has(id)) }))
+          .filter((g) => g.pointIds.length > 0),
+        columns: region.columns
+          .map((g) => ({ ...g, pointIds: g.pointIds.filter((id) => !selected.has(id)) }))
+          .filter((g) => g.pointIds.length > 0),
+      }))
+      .filter(
+        (region) =>
+          region.pointIds.length > 0 || region.rows.length > 0 || region.columns.length > 0,
+      )
+    return pruned
+  }
+
+  function handleLinkSelectedAsRail() {
+    if (linkSelection.size < 2) {
+      return
+    }
+    const selectedIds = new Set(linkSelection)
+    const regionId = createRegionId()
+    const rowId = createAxisGroupId()
+    const orderedSelected = definition.points
+      .filter((p) => selectedIds.has(p.id))
+      .map((p) => p.id)
+    const newRegion: DefinitionRegion = {
+      id: regionId,
+      name: nextRegionName(definition),
+      kind: 'custom-grid',
+      pointIds: orderedSelected,
+      rows: [{ id: rowId, label: 'Net', pointIds: orderedSelected }],
+      columns: [],
+    }
+    const prunedRegions = pruneSelectedFromExistingGroups(definition.regions, selectedIds)
+    const nextPoints = definition.points.map((point) => {
+      if (!selectedIds.has(point.id)) {
+        return point
+      }
+      return {
+        ...point,
+        regionId,
+        rowId,
+        // Drop any prior columnId so the new manual rail is the source of truth.
+        columnId: undefined,
+      }
+    })
+    onChange({
+      ...definition,
+      points: nextPoints,
+      regions: [...(prunedRegions ?? []), newRegion],
+    })
+    setLinkSelection(new Set())
+  }
+
+  function handleUnlinkSelected() {
+    if (linkSelection.size === 0) {
+      return
+    }
+    const selectedIds = new Set(linkSelection)
+    const prunedRegions = pruneSelectedFromExistingGroups(definition.regions, selectedIds)
+    const nextPoints = definition.points.map((point) => {
+      if (!selectedIds.has(point.id)) {
+        return point
+      }
+      return {
+        ...point,
+        regionId: undefined,
+        rowId: undefined,
+        columnId: undefined,
+      }
+    })
+    onChange({
+      ...definition,
+      points: nextPoints,
+      regions: prunedRegions,
+    })
+    setLinkSelection(new Set())
+  }
+
   return (
     <section className="pin-editor" aria-label="Add pin holes">
       <header className="pin-editor__header">
@@ -457,6 +644,24 @@ export function PinPointEditor({
             </button>
             <button
               type="button"
+              className={`action-button${linkMode ? '' : ' action-button--ghost'}`}
+              onClick={() => (linkMode ? cancelLinkMode() : startLinkMode())}
+              disabled={isBusy}
+              aria-pressed={linkMode}
+            >
+              {linkMode ? 'Cancel link' : 'Link pins'}
+            </button>
+            <button
+              type="button"
+              className={`action-button${eraseMode ? '' : ' action-button--ghost'}`}
+              onClick={() => (eraseMode ? cancelEraseMode() : startEraseMode())}
+              disabled={isBusy}
+              aria-pressed={eraseMode}
+            >
+              {eraseMode ? 'Cancel erase' : 'Erase area'}
+            </button>
+            <button
+              type="button"
               className="action-button"
               onClick={onSaveAndFinish}
               disabled={isBusy}
@@ -487,8 +692,43 @@ export function PinPointEditor({
           ? 'Grid fill: click the opposite corner.'
           : gridStep.kind === 'configure'
           ? 'Adjust rows, columns, and linking below, then Apply. Click the canvas to re-pick corners.'
+          : linkMode
+          ? 'Link pins: click any pin holes to toggle them in the selection, then Link as rail to connect them electrically. Use Unlink to remove the selection from any rails.'
+          : eraseMode
+          ? 'Erase area: drag a rectangle over pin holes to remove them all at once.'
           : 'Click the image to drop a pin hole. Click an existing pin once to select it, then click again to remove it. These points will be selectable later when wiring the breadboard.'}
       </p>
+      {linkMode ? (
+        <div className="pin-editor__calibration-form" role="group" aria-label="Link selected pins">
+          <p className="pin-editor__hint" aria-live="polite">
+            {linkSelection.size} pin{linkSelection.size === 1 ? '' : 's'} selected
+          </p>
+          <button
+            type="button"
+            className="action-button"
+            onClick={handleLinkSelectedAsRail}
+            disabled={linkSelection.size < 2}
+          >
+            Link as rail
+          </button>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={handleUnlinkSelected}
+            disabled={linkSelection.size === 0}
+          >
+            Unlink selected
+          </button>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={() => setLinkSelection(new Set())}
+            disabled={linkSelection.size === 0}
+          >
+            Clear selection
+          </button>
+        </div>
+      ) : null}
       {calibrationStep.kind === 'awaiting-distance' ? (
         <div className="pin-editor__calibration-form" role="group" aria-label="Set scale distance">
           <label className="control-group" htmlFor="calibration-distance">
@@ -648,6 +888,8 @@ export function PinPointEditor({
             role="img"
             aria-label={`Breadboard pin hole canvas with ${definition.points.length} pins`}
             onPointerDown={handleStagePointerDown}
+            onPointerMove={handleErasePointerMove}
+            onPointerUp={handleErasePointerUp}
           >
             <image
               href={imagePath}
@@ -655,6 +897,44 @@ export function PinPointEditor({
               height={safeHeight}
               preserveAspectRatio="none"
             />
+            <g className="pin-editor__rails" aria-hidden="true">
+              {railsOverlay.map((group, groupIndex) => {
+                if (group.size < 2) {
+                  return null
+                }
+                const pts = definition.points.filter((p) => group.has(p.id))
+                if (pts.length < 2) {
+                  return null
+                }
+                const xs = pts.map((p) => p.x)
+                const ys = pts.map((p) => p.y)
+                const xRange = Math.max(...xs) - Math.min(...xs)
+                const yRange = Math.max(...ys) - Math.min(...ys)
+                const sorted = [...pts].sort((a, b) =>
+                  xRange >= yRange ? a.x - b.x : a.y - b.y,
+                )
+                const groupKey = sorted.map((p) => p.id).join('|') || `g-${groupIndex}`
+                let hash = 0
+                for (let i = 0; i < groupKey.length; i += 1) {
+                  hash = (hash * 31 + groupKey.charCodeAt(i)) >>> 0
+                }
+                const palette = ['#1f5fcc', '#cc3333', '#1f8e4d', '#e08a00', '#7a3fc6', '#0a8a8a', '#b8338a', '#5a6f00']
+                const color = palette[hash % palette.length]
+                const pointsAttr = sorted.map((p) => `${p.x},${p.y}`).join(' ')
+                return (
+                  <polyline
+                    key={`rail-${groupIndex}`}
+                    points={pointsAttr}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={Math.max(2, Math.min(safeWidth, safeHeight) * 0.005)}
+                    strokeOpacity={0.4}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )
+              })}
+            </g>
             {/* Saved calibration line */}
             {definition.scaleCalibration && calibrationStep.kind === 'idle' ? (
               <g className="pin-editor__calibration-overlay" aria-hidden="true">
@@ -738,21 +1018,39 @@ export function PinPointEditor({
                 ))}
               </g>
             ) : null}
+            {eraseMode && eraseRect ? (
+              <rect
+                x={Math.min(eraseRect.x1, eraseRect.x2)}
+                y={Math.min(eraseRect.y1, eraseRect.y2)}
+                width={Math.abs(eraseRect.x2 - eraseRect.x1)}
+                height={Math.abs(eraseRect.y2 - eraseRect.y1)}
+                fill="rgba(239, 68, 68, 0.2)"
+                stroke="#ef4444"
+                strokeWidth={2}
+                strokeDasharray="6 3"
+                pointerEvents="none"
+                aria-hidden="true"
+              />
+            ) : null}
             {definition.points.map((point) => {
               const isPending = pendingRemovalId === point.id
+              const isLinkSelected = linkMode && linkSelection.has(point.id)
               const radius = Math.max(3, Math.min(safeWidth, safeHeight) * 0.004)
 
               return (
                 <g key={point.id} className="pin-editor__pin-group">
                   <circle
                     data-pin-point-id={point.id}
-                    className={`pin-editor__pin${isPending ? ' pin-editor__pin--pending' : ''}`}
+                    className={`pin-editor__pin${isPending ? ' pin-editor__pin--pending' : ''}${isLinkSelected ? ' pin-editor__pin--link-selected' : ''}`}
                     cx={point.x}
                     cy={point.y}
                     r={radius}
+                    fill={isLinkSelected ? '#1f5fcc' : undefined}
+                    stroke={isLinkSelected ? '#0a2d6b' : undefined}
                     role="button"
-                    aria-label={`Pin hole ${point.label}${isPending ? ' (click again to remove)' : ''}`}
+                    aria-label={`Pin hole ${point.label}${isPending ? ' (click again to remove)' : ''}${isLinkSelected ? ' (selected for linking)' : ''}`}
                     onPointerDown={(event) => {
+                      if (eraseMode) return
                       event.stopPropagation()
                       handlePinClick(point.id)
                     }}
