@@ -1147,54 +1147,90 @@ export function WireEditor({
               const isLiveWire =
                 connectedPinIds.has(wire.fromPointId) || connectedPinIds.has(wire.toPointId)
               const wireUserColor = wire.color ?? '#cc3333'
-              // Glossy plastic round-jumper rendering. Each wire is drawn
-              // as a stack of polylines so the eye reads it as a raised,
-              // shiny cylinder sitting on top of the breadboard:
-              //   - drop-shadowed body (the colored insulation): wide
-              //     enough to fully cover a hole, so it looks like it's
-              //     plugged in and the hole is hidden underneath.
-              //   - dark rim along the body to give the cylinder edges.
-              //   - thin bright specular highlight running down the
-              //     middle, like overhead studio lighting on glossy
-              //     plastic.
-              //   - tiny metallic silver pin caps with a dark crimp
-              //     band where the insulation meets the metal pin.
+              // Glossy plastic round-jumper rendering. The wire is a single
+              // wide stroke filled with a per-wire linearGradient oriented
+              // perpendicular to the wire's direction, so the eye reads a
+              // continuous cylindrical shading band across the wire's width
+              // (dark edge -> body -> bright gloss stripe -> body -> dark
+              // edge). Width is scaled large enough to fully cover the
+              // breadboard hole underneath, like a real plugged-in jumper.
               const bodyWidth = Math.max(
-                radius * 2.4,
-                isPending ? strokeWidth * 1.8 : strokeWidth * 1.5,
+                radius * 3.4,
+                isPending ? strokeWidth * 2.2 : strokeWidth * 1.9,
               )
-              const edgeWidth = bodyWidth * 1.08
-              const rimWidth = bodyWidth * 0.92
-              const highlightWidth = Math.max(0.9, bodyWidth * 0.18)
-              const edgeColor = shadeDarken(wireUserColor, 0.7)
-              const rimColor = shadeDarken(wireUserColor, 0.35)
-              const highlightColor = shadeLighten(wireUserColor, 0.7)
+              const edgeWidth = bodyWidth * 1.06
+              const edgeColor = shadeDarken(wireUserColor, 0.75)
+              const midColor = shadeDarken(wireUserColor, 0.15)
+              const glossColor = shadeLighten(wireUserColor, 0.65)
+              // Perpendicular gradient endpoints. Use first->last vertex as
+              // the dominant wire direction (good enough for our short
+              // routed wires; multi-segment wires still get a coherent
+              // cross-section because the gradient is anchored at the wire's
+              // midpoint).
+              const v0 = vertices[0]
+              const vN = vertices[vertices.length - 1]
+              const midX = (v0.x + vN.x) / 2
+              const midY = (v0.y + vN.y) / 2
+              const dx = vN.x - v0.x
+              const dy = vN.y - v0.y
+              const len = Math.max(0.0001, Math.hypot(dx, dy))
+              // Unit perpendicular vector. Rotated -90deg so the "top" of
+              // the wire (gradient origin) is the upper-left side, matching
+              // an overhead light source for consistency across all wires.
+              const perpX = -dy / len
+              const perpY = dx / len
+              const halfW = bodyWidth / 2
+              const gradientId = `wire-grad-${wire.id}`
+              const gx1 = midX + perpX * halfW
+              const gy1 = midY + perpY * halfW
+              const gx2 = midX - perpX * halfW
+              const gy2 = midY - perpY * halfW
               const ariaLabel = `Wire from ${fromPoint.label} to ${toPoint.label}${
                 isPending ? ' (click again to delete)' : ''
               }${isLiveWire ? ' (live)' : ''}`
-              const capRadius = Math.max(2.2, bodyWidth * 0.42)
+              const capRadius = Math.max(2.4, bodyWidth * 0.42)
               const crimpRadius = capRadius * 0.55
-              const endpoints = [vertices[0], vertices[vertices.length - 1]]
+              const endpoints = [v0, vN]
               return (
                 <g key={wire.id}>
+                  <defs>
+                    <linearGradient
+                      id={gradientId}
+                      gradientUnits="userSpaceOnUse"
+                      x1={gx1}
+                      y1={gy1}
+                      x2={gx2}
+                      y2={gy2}
+                    >
+                      <stop offset="0%" stopColor={edgeColor} />
+                      <stop offset="18%" stopColor={midColor} />
+                      <stop offset="38%" stopColor={wireUserColor} />
+                      <stop offset="50%" stopColor={glossColor} />
+                      <stop offset="62%" stopColor={wireUserColor} />
+                      <stop offset="82%" stopColor={midColor} />
+                      <stop offset="100%" stopColor={edgeColor} />
+                    </linearGradient>
+                  </defs>
                   {/* offset shadow polyline – mimics a soft drop shadow without
                       using an SVG <filter> (which would collapse for perfectly
                       horizontal or vertical wires whose bbox has zero height
                       or width). */}
                   <polyline
                     points={vertices
-                      .map((v) => `${v.x + 0.8},${v.y + 1.6}`)
+                      .map((v) => `${v.x + 1.2},${v.y + 2.2}`)
                       .join(' ')}
                     fill="none"
                     stroke="#000000"
-                    strokeOpacity={0.35}
+                    strokeOpacity={0.4}
                     strokeWidth={edgeWidth}
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     pointerEvents="none"
                     aria-hidden="true"
                   />
-                  {/* dark outer rim – the underside of the cylinder */}
+                  {/* dark outer rim – guarantees a crisp dark edge even if
+                      the gradient endpoints fall slightly inside the stroke
+                      (e.g. very short wires). */}
                   <polyline
                     points={points}
                     fill="none"
@@ -1205,12 +1241,13 @@ export function WireEditor({
                     pointerEvents="none"
                     aria-hidden="true"
                   />
-                  {/* main colored body – click target, full opacity */}
+                  {/* main colored body with cross-section gradient – click
+                      target, fully opaque so it covers the holes underneath. */}
                   <polyline
                     className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
                     points={points}
                     fill="none"
-                    stroke={wireUserColor}
+                    stroke={`url(#${gradientId})`}
                     strokeWidth={bodyWidth}
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -1218,27 +1255,16 @@ export function WireEditor({
                     aria-label={ariaLabel}
                     onClick={() => handleWireClick(wire.id)}
                   />
-                  {/* mid-tone shading just inside the rim for roundness */}
+                  {/* thin pure-white specular line – the glossy "wet" sheen
+                      catching the brightest light on the cylinder's top. */}
                   <polyline
                     points={points}
                     fill="none"
-                    stroke={rimColor}
-                    strokeWidth={rimWidth}
-                    strokeOpacity={0.18}
+                    stroke="#ffffff"
+                    strokeWidth={Math.max(0.7, bodyWidth * 0.08)}
+                    strokeOpacity={0.55}
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    pointerEvents="none"
-                    aria-hidden="true"
-                  />
-                  {/* bright specular highlight – the glossy top */}
-                  <polyline
-                    points={points}
-                    fill="none"
-                    stroke={highlightColor}
-                    strokeWidth={highlightWidth}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeOpacity={0.95}
                     pointerEvents="none"
                     aria-hidden="true"
                   />
@@ -1250,7 +1276,7 @@ export function WireEditor({
                         cy={pt.y}
                         r={capRadius}
                         fill={edgeColor}
-                        opacity={0.8}
+                        opacity={0.85}
                       />
                       <circle
                         cx={pt.x}
