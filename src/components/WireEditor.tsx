@@ -723,6 +723,23 @@ export function WireEditor({
       }),
     [intrinsicElectricalGroups, connectedPinIds],
   )
+  // Map every breadboard pin that is the endpoint of a user wire to that
+  // wire's display color. Used to color the "active path" segment of a rail
+  // (from the module pin out to the wire attachment hole) so the eye can
+  // follow one continuous wire-colored path through the circuit.
+  const wireEndpointColors = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const wire of project.wires) {
+      const color = wire.color ?? '#cc3333'
+      if (!map.has(wire.fromPointId)) {
+        map.set(wire.fromPointId, color)
+      }
+      if (!map.has(wire.toPointId)) {
+        map.set(wire.toPointId, color)
+      }
+    }
+    return map
+  }, [project.wires])
 
   return (
     <section className="wire-editor" aria-label="Wire breadboard">
@@ -842,9 +859,18 @@ export function WireEditor({
             ) : null}
             {/*
               Live rails: a connected module pin energises the entire rail it
-              plugs into, so we draw a two-toned overlay (solid green base +
-              dashed yellow stripe) along the rail. This is always on - even
-              when 'Show rails' is off - so the active circuit is obvious.
+              plugs into. We split each rail into two visual zones:
+                - "active path" (wire color): from the module pin hole out to
+                  the farthest hole that has a wire endpoint. This is the
+                  segment of the rail that actually carries the signal to the
+                  attached wire, so it reads as one continuous colored path
+                  with the wire itself.
+                - "stub" (green): the remaining holes on the rail that are
+                  electrically the same net but lie beyond the wire
+                  attachment. They are still "live" but not part of the
+                  current path, so they stay green.
+              If the rail has no wire endpoint on it, the entire rail is
+              drawn green (it's energised but no wire is yet using it).
             */}
             <g className="wire-editor__live-rails" aria-hidden="true">
               {liveRailGroups.map((group, groupIndex) => {
@@ -862,28 +888,66 @@ export function WireEditor({
                 const sorted = [...pts].sort((a, b) =>
                   xRange >= yRange ? a.x - b.x : a.y - b.y,
                 )
-                const points = sorted.map((p) => `${p.x},${p.y}`).join(' ')
                 const baseWidth = Math.max(2.5, radius * 1.5)
+                const stubColor = '#22c55e'
+                const renderPolyline = (
+                  segPts: typeof sorted,
+                  color: string,
+                  keySuffix: string,
+                ) => {
+                  if (segPts.length < 2) {
+                    return null
+                  }
+                  const points = segPts.map((p) => `${p.x},${p.y}`).join(' ')
+                  return (
+                    <polyline
+                      key={`live-rail-${groupIndex}-${keySuffix}`}
+                      points={points}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={baseWidth}
+                      strokeOpacity={0.85}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  )
+                }
+                const modulePinIdx: number[] = []
+                const wireEndpointIdx: number[] = []
+                let activeColor: string | undefined
+                for (let i = 0; i < sorted.length; i += 1) {
+                  const id = sorted[i].id
+                  if (alignedPinIds.has(id)) {
+                    modulePinIdx.push(i)
+                  }
+                  const wireColor = wireEndpointColors.get(id)
+                  if (wireColor !== undefined) {
+                    wireEndpointIdx.push(i)
+                    if (activeColor === undefined) {
+                      activeColor = wireColor
+                    }
+                  }
+                }
+                // No wire attached to this rail: render the whole rail as a
+                // green "live but unused" stub (preserves prior behavior).
+                if (wireEndpointIdx.length === 0 || activeColor === undefined) {
+                  return (
+                    <g key={`live-rail-${groupIndex}`}>
+                      {renderPolyline(sorted, stubColor, 'all')}
+                    </g>
+                  )
+                }
+                const spanIdx = [...modulePinIdx, ...wireEndpointIdx]
+                const activeMin = Math.min(...spanIdx)
+                const activeMax = Math.max(...spanIdx)
+                const activeSeg = sorted.slice(activeMin, activeMax + 1)
+                const leftStub = sorted.slice(0, activeMin + 1)
+                const rightStub = sorted.slice(activeMax)
                 return (
                   <g key={`live-rail-${groupIndex}`}>
-                    <polyline
-                      points={points}
-                      fill="none"
-                      stroke="#22c55e"
-                      strokeWidth={baseWidth}
-                      strokeOpacity={0.75}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    <polyline
-                      points={points}
-                      fill="none"
-                      stroke="#facc15"
-                      strokeWidth={Math.max(1, baseWidth * 0.45)}
-                      strokeDasharray={`${baseWidth * 1.2} ${baseWidth * 1.2}`}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
+                    {renderPolyline(leftStub, stubColor, 'stub-l')}
+                    {renderPolyline(rightStub, stubColor, 'stub-r')}
+                    {renderPolyline(activeSeg, activeColor, 'active')}
                   </g>
                 )
               })}
@@ -980,6 +1044,10 @@ export function WireEditor({
                       break
                     }
                   }
+                  // Yellow when this module pin is in the air, green when it
+                  // sits over a breadboard hole (i.e. plugged in).
+                  const fillColor = aligned ? '#22c55e' : '#facc15'
+                  const strokeColor = aligned ? '#0e2a14' : '#a16207'
                   return (
                     <circle
                       key={`module-pt-${instance.id}-${physPt.id}`}
@@ -987,8 +1055,8 @@ export function WireEditor({
                       cx={absX}
                       cy={absY}
                       r={modulePointRadius}
-                      fill={aligned ? '#1f8e4d' : '#facc15'}
-                      stroke={aligned ? '#0e5a2f' : '#a16207'}
+                      fill={fillColor}
+                      stroke={strokeColor}
                       strokeWidth={1}
                       pointerEvents="none"
                       aria-hidden="true"
@@ -1008,11 +1076,15 @@ export function WireEditor({
               const points = vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ')
               // A wire is "live" when either of its endpoints is connected to
               // a module pin (directly aligned or transitively via rails and
-              // other wires). Live wires get a two-toned overlay to mirror the
-              // live-rail highlight on either side.
+              // other wires). Live wires get a dashed yellow stripe overlay
+              // so the entire signal path (live rail → live wire → live rail
+              // → module pin) reads as one continuous lit path. The wire's
+              // own user color stays as the base stroke so different wires
+              // remain distinguishable.
               const isLiveWire =
                 connectedPinIds.has(wire.fromPointId) || connectedPinIds.has(wire.toPointId)
               const liveStrokeWidth = isPending ? strokeWidth * 1.6 : strokeWidth
+              const wireUserColor = wire.color ?? '#222'
 
               return (
                 <g key={wire.id}>
@@ -1020,7 +1092,7 @@ export function WireEditor({
                     className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
                     points={points}
                     fill="none"
-                    stroke={wire.color ?? '#222'}
+                    stroke={wireUserColor}
                     strokeWidth={liveStrokeWidth}
                     strokeLinecap="round"
                     strokeLinejoin="round"
@@ -1120,7 +1192,13 @@ export function WireEditor({
               const isAligned = alignedPinIds.has(point.id)
               const isConnected = connectedPinIds.has(point.id)
               const isCovered = coveredPinIds.has(point.id)
-              if (isCovered && !isAligned && !isPendingFrom && !isSnapTarget) {
+              // When a module pin is plugged into this hole, the module's own
+              // green pin dot serves as the visual indicator. Rendering the
+              // breadboard hole on top would just paint red over the green.
+              if (isAligned && !isPendingFrom && !isSnapTarget) {
+                return null
+              }
+              if (isCovered && !isPendingFrom && !isSnapTarget) {
                 return null
               }
               const pinRadius = radius
@@ -1145,8 +1223,8 @@ export function WireEditor({
                     cx={point.x}
                     cy={point.y}
                     r={pinRadius}
-                    fill={isAligned ? '#22c55e' : isConnected ? '#facc15' : undefined}
-                    stroke={isAligned ? '#0e5a2f' : isConnected ? '#a16207' : undefined}
+                    fill={isConnected ? '#facc15' : undefined}
+                    stroke={isConnected ? '#a16207' : undefined}
                     role="button"
                     aria-label={`Pin hole ${point.label}${isPendingFrom ? ' (selected as wire start)' : ''}${isAligned ? ' (module pin aligned)' : isConnected ? ' (electrically connected to module pin)' : ''}`}
                     onClick={() => handlePinClick(point.id)}
