@@ -867,6 +867,44 @@ export function WireEditor({
               height={safeHeight}
               preserveAspectRatio="none"
             />
+            {/*
+              Reusable visual assets for the glossy 3D jumper-wire look:
+                - wire-editor__shadow: soft drop shadow under the wire so it
+                  reads as raised above the breadboard.
+                - wire-editor__silver-cap: vertical metallic gradient applied
+                  to the small endpoint pins to mimic shiny tinned metal.
+            */}
+            <defs>
+              <filter
+                id="wire-editor__shadow"
+                x="-20%"
+                y="-20%"
+                width="140%"
+                height="140%"
+              >
+                <feGaussianBlur in="SourceAlpha" stdDeviation={1.5} />
+                <feOffset dx={0.6} dy={1.2} result="off" />
+                <feComponentTransfer>
+                  <feFuncA type="linear" slope={0.55} />
+                </feComponentTransfer>
+                <feMerge>
+                  <feMergeNode />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+              <linearGradient
+                id="wire-editor__silver-cap"
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="1"
+              >
+                <stop offset="0%" stopColor="#f5f7fa" />
+                <stop offset="35%" stopColor="#cdd2d8" />
+                <stop offset="60%" stopColor="#7d848c" />
+                <stop offset="100%" stopColor="#3a3f44" />
+              </linearGradient>
+            </defs>
             {showRails ? (
               <g className="wire-editor__rails" aria-hidden="true">
                 {electricalGroups.map((group, groupIndex) => {
@@ -1120,83 +1158,115 @@ export function WireEditor({
                     )
                   : baseVertices
               const points = vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ')
-              // A wire is "live" when either of its endpoints is connected to
-              // a module pin (directly aligned or transitively via rails and
-              // other wires). Used only for the aria-label hint today.
               const isLiveWire =
                 connectedPinIds.has(wire.fromPointId) || connectedPinIds.has(wire.toPointId)
               const wireUserColor = wire.color ?? '#cc3333'
-              // Render the wire as a stack of three concentric strokes to
-              // emulate a glossy round breadboard jumper wire (the solid
-              // kind with rigid plastic insulation, not the floppy
-              // male/female ribbon kind):
-              //   1. shadow/edge: a darker, slightly wider stroke gives
-              //      the wire a dark rim that reads as the underside of a
-              //      cylinder.
-              //   2. body: the user-chosen color at full width.
-              //   3. specular highlight: a thin, lightened stroke down the
-              //      center suggests a glossy curved surface catching
-              //      overhead light.
-              // Pending-deletion state widens everything proportionally.
-              const bodyWidth = isPending ? strokeWidth * 1.6 : strokeWidth
-              const edgeWidth = bodyWidth * 1.35
-              const highlightWidth = Math.max(0.8, bodyWidth * 0.35)
-              const edgeColor = shadeDarken(wireUserColor, 0.55)
-              const highlightColor = shadeLighten(wireUserColor, 0.55)
+              // Glossy plastic round-jumper rendering. Each wire is drawn
+              // as a stack of polylines so the eye reads it as a raised,
+              // shiny cylinder sitting on top of the breadboard:
+              //   - drop-shadowed body (the colored insulation): wide
+              //     enough to fully cover a hole, so it looks like it's
+              //     plugged in and the hole is hidden underneath.
+              //   - dark rim along the body to give the cylinder edges.
+              //   - thin bright specular highlight running down the
+              //     middle, like overhead studio lighting on glossy
+              //     plastic.
+              //   - tiny metallic silver pin caps with a dark crimp
+              //     band where the insulation meets the metal pin.
+              const bodyWidth = Math.max(
+                radius * 2.4,
+                isPending ? strokeWidth * 1.8 : strokeWidth * 1.5,
+              )
+              const edgeWidth = bodyWidth * 1.08
+              const rimWidth = bodyWidth * 0.92
+              const highlightWidth = Math.max(0.9, bodyWidth * 0.18)
+              const edgeColor = shadeDarken(wireUserColor, 0.7)
+              const rimColor = shadeDarken(wireUserColor, 0.35)
+              const highlightColor = shadeLighten(wireUserColor, 0.7)
               const ariaLabel = `Wire from ${fromPoint.label} to ${toPoint.label}${
                 isPending ? ' (click again to delete)' : ''
               }${isLiveWire ? ' (live)' : ''}`
-              // Endpoint metal caps: small grey discs imply the wire's
-              // rigid pin connectors plugged into the breadboard hole.
-              const capRadius = Math.max(1.5, bodyWidth * 0.55)
+              const capRadius = Math.max(2.2, bodyWidth * 0.42)
+              const crimpRadius = capRadius * 0.55
               const endpoints = [vertices[0], vertices[vertices.length - 1]]
               return (
                 <g key={wire.id}>
-                  <polyline
-                    points={points}
-                    fill="none"
-                    stroke={edgeColor}
-                    strokeWidth={edgeWidth}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    pointerEvents="none"
-                    aria-hidden="true"
-                  />
-                  <polyline
-                    className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
-                    points={points}
-                    fill="none"
-                    stroke={wireUserColor}
-                    strokeWidth={bodyWidth}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    role="button"
-                    aria-label={ariaLabel}
-                    onClick={() => handleWireClick(wire.id)}
-                  />
-                  <polyline
-                    points={points}
-                    fill="none"
-                    stroke={highlightColor}
-                    strokeWidth={highlightWidth}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeOpacity={0.85}
-                    pointerEvents="none"
-                    aria-hidden="true"
-                  />
-                  {endpoints.map((pt, i) => (
-                    <circle
-                      key={`wire-cap-${wire.id}-${i}`}
-                      cx={pt.x}
-                      cy={pt.y}
-                      r={capRadius}
-                      fill="#9aa0a6"
-                      stroke="#3a3f44"
-                      strokeWidth={0.6}
+                  <g filter="url(#wire-editor__shadow)">
+                    {/* dark outer rim – the underside of the cylinder */}
+                    <polyline
+                      points={points}
+                      fill="none"
+                      stroke={edgeColor}
+                      strokeWidth={edgeWidth}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                       pointerEvents="none"
                       aria-hidden="true"
                     />
+                    {/* main colored body – click target, full opacity */}
+                    <polyline
+                      className={`wire-editor__wire${isPending ? ' wire-editor__wire--pending' : ''}`}
+                      points={points}
+                      fill="none"
+                      stroke={wireUserColor}
+                      strokeWidth={bodyWidth}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      role="button"
+                      aria-label={ariaLabel}
+                      onClick={() => handleWireClick(wire.id)}
+                    />
+                    {/* mid-tone shading just inside the rim for roundness */}
+                    <polyline
+                      points={points}
+                      fill="none"
+                      stroke={rimColor}
+                      strokeWidth={rimWidth}
+                      strokeOpacity={0.18}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      pointerEvents="none"
+                      aria-hidden="true"
+                    />
+                    {/* bright specular highlight – the glossy top */}
+                    <polyline
+                      points={points}
+                      fill="none"
+                      stroke={highlightColor}
+                      strokeWidth={highlightWidth}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeOpacity={0.95}
+                      pointerEvents="none"
+                      aria-hidden="true"
+                    />
+                  </g>
+                  {/* metallic silver pin caps with crimp band */}
+                  {endpoints.map((pt, i) => (
+                    <g key={`wire-cap-${wire.id}-${i}`} pointerEvents="none" aria-hidden="true">
+                      <circle
+                        cx={pt.x}
+                        cy={pt.y}
+                        r={capRadius}
+                        fill={edgeColor}
+                        opacity={0.8}
+                      />
+                      <circle
+                        cx={pt.x}
+                        cy={pt.y}
+                        r={crimpRadius}
+                        fill="url(#wire-editor__silver-cap)"
+                        stroke="#2a2d31"
+                        strokeWidth={0.4}
+                      />
+                      <circle
+                        cx={pt.x - crimpRadius * 0.25}
+                        cy={pt.y - crimpRadius * 0.35}
+                        r={crimpRadius * 0.35}
+                        fill="#ffffff"
+                        opacity={0.65}
+                      />
+                    </g>
                   ))}
                 </g>
               )
