@@ -119,6 +119,7 @@ type WireEditorProps = {
   status: string
   onBack: () => void
   onChange: (project: BreadboardProject) => void
+  onCreatePassive?: () => void
 }
 
 type WireVertex = {
@@ -238,6 +239,7 @@ export function WireEditor({
   status,
   onBack,
   onChange,
+  onCreatePassive,
 }: WireEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [pendingFromPointId, setPendingFromPointId] = useState<string | null>(null)
@@ -1646,6 +1648,7 @@ export function WireEditor({
         onSetRotation={handleSetModuleRotation}
         onSetScale={handleSetModuleScale}
         onAlignToPin={handleAlignModuleToPin}
+        onCreatePassive={onCreatePassive}
       />
       <ComponentsPanel
         components={project.components ?? []}
@@ -1686,9 +1689,9 @@ function ComponentsPanel({ components, isBusy, onAdd, onRemove }: ComponentsPane
       <header className="components-panel__header">
         <h2 className="components-panel__title">Components</h2>
         <p className="components-panel__hint">
-          Track resistors, LEDs, and other parts you place on the breadboard. To actually drop a
-          generated resistor or capacitor onto the board, scroll to <strong>Modules</strong> below
-          and choose <strong>Place between two pins</strong>.
+          Track resistors, LEDs, and other parts you place on the breadboard. The entries here are
+          notes only — to actually drop a resistor or capacitor on the board, use the
+          <strong> Modules</strong> panel above and click <strong>Generate a passive part</strong>.
         </p>
       </header>
       <form className="components-panel__form" onSubmit={handleSubmit}>
@@ -1780,6 +1783,7 @@ type ModulesPanelProps = {
   onSetRotation: (moduleId: string, rotationDeg: number) => void
   onSetScale: (moduleId: string, scaleFactor: number) => void
   onAlignToPin: (moduleId: string) => void
+  onCreatePassive?: () => void
 }
 
 function ModulesPanel({
@@ -1794,6 +1798,7 @@ function ModulesPanel({
   onSetRotation,
   onSetScale,
   onAlignToPin,
+  onCreatePassive,
 }: ModulesPanelProps) {
   const placeableParts = useMemo(
     () => libraryParts.filter((part) => part.dimensions.widthMm > 0 && part.dimensions.heightMm > 0),
@@ -1846,6 +1851,17 @@ function ModulesPanel({
           two-pin placement mode and only fit on pin pairs that match their lead spacing. All
           modules render at the breadboard&apos;s physical scale.
         </p>
+        {onCreatePassive ? (
+          <button
+            type="button"
+            className="action-button"
+            onClick={onCreatePassive}
+            disabled={isBusy}
+            style={{ alignSelf: 'flex-start', marginTop: 6 }}
+          >
+            Generate a passive part
+          </button>
+        ) : null}
       </header>
       {placeableParts.length === 0 ? (
         <p className="components-panel__empty">
