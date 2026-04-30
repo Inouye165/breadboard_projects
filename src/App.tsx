@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import './App.css'
 import { ComponentLibrary } from './components/ComponentLibrary'
+import { GeneratedPassiveEditor } from './components/GeneratedPassiveEditor'
 import { ImageWorkspace } from './components/ImageWorkspace'
 import { ModuleWorkspace } from './components/ModuleWorkspace'
 import { PinPointEditor } from './components/PinPointEditor'
@@ -45,6 +46,7 @@ type WizardStep =
   | 'wire'
   | 'view-project'
   | 'edit-library-part'
+  | 'edit-generated-passive'
 
 type HomeTab = 'projects' | 'components' | 'library-parts'
 
@@ -295,6 +297,36 @@ function App() {
     setCurrentLibraryPart(newPart)
     setStep('edit-library-part')
     setStatus('New module. Upload a top image, calibrate corners, then place pins.')
+  }
+
+  function handleNewGeneratedPassive() {
+    setCurrentLibraryPart(null)
+    setStep('edit-generated-passive')
+    setStatus('Pick a part type, set its options, and save.')
+  }
+
+  function handleOpenGeneratedPassive(part: LibraryPartDefinition) {
+    setCurrentLibraryPart(part)
+    setStep('edit-generated-passive')
+    setStatus(`Editing generated part ${part.name}.`)
+  }
+
+  async function handleSaveGeneratedPassive(part: LibraryPartDefinition) {
+    setIsLibraryPartBusy(true)
+    try {
+      const isExisting = libraryParts.some((existing) => existing.id === part.id)
+      const saved = isExisting
+        ? await updateLibraryPartRecord(part)
+        : await createLibraryPartRecord(part)
+      setLibraryParts((existing) => mergeLibraryPartLibrary(existing, saved))
+      setCurrentLibraryPart(saved)
+      setStatus(`Saved generated part: ${saved.name}.`)
+      setStep('home')
+    } catch {
+      setStatus('Could not save the generated part.')
+    } finally {
+      setIsLibraryPartBusy(false)
+    }
   }
 
   async function handleOpenLibraryPart(partId: string) {
@@ -784,7 +816,7 @@ function App() {
           ) : (
             <div className="home-tabs__panel">
               <section className="home-screen__section" aria-label="Modules and sensors">
-                <div className="home-screen__actions">
+                <div className="home-screen__actions" style={{ display: 'flex', gap: 8 }}>
                   <button
                     type="button"
                     className="action-button"
@@ -792,6 +824,14 @@ function App() {
                     disabled={isLibraryPartBusy}
                   >
                     Add module/sensor
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={handleNewGeneratedPassive}
+                    disabled={isLibraryPartBusy}
+                  >
+                    Add generated part
                   </button>
                 </div>
                 <h2 className="home-screen__section-title">Calibrated modules &amp; sensors</h2>
@@ -820,7 +860,11 @@ function App() {
                         <button
                           type="button"
                           className="action-button action-button--ghost"
-                          onClick={() => void handleOpenLibraryPart(part.id)}
+                          onClick={() =>
+                            part.kind === 'generated-passive'
+                              ? handleOpenGeneratedPassive(part)
+                              : void handleOpenLibraryPart(part.id)
+                          }
                           disabled={isLibraryPartBusy}
                         >
                           Open
@@ -984,6 +1028,15 @@ function App() {
           onBack={handleBackToHome}
           onChange={handleLibraryPartChange}
           onSave={() => void handleSaveLibraryPart()}
+        />
+      ) : null}
+      {step === 'edit-generated-passive' ? (
+        <GeneratedPassiveEditor
+          initialPart={currentLibraryPart}
+          isBusy={isLibraryPartBusy}
+          status={status}
+          onCancel={handleBackToHome}
+          onSave={(part) => void handleSaveGeneratedPassive(part)}
         />
       ) : null}
     </main>

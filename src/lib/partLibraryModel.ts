@@ -14,6 +14,7 @@ export const PART_CATEGORIES = [
   'display',
   'power',
   'custom',
+  'passive',
 ] as const
 
 export type PartCategory = (typeof PART_CATEGORIES)[number]
@@ -127,10 +128,26 @@ export type LibraryPartDimensions = {
   thicknessMm?: number
 }
 
+export const LIBRARY_PART_KINDS = ['image-module', 'generated-passive'] as const
+export type LibraryPartKind = (typeof LIBRARY_PART_KINDS)[number]
+
+/**
+  * Synthetic image-view id used to anchor `PhysicalPoint` entries on parts
+  * that are rendered programmatically (e.g. generated passive components).
+  * They have no underlying image, but reusing the same `viewId` field keeps
+  * downstream snapping/rendering code simple.
+  */
+export const GENERATED_PASSIVE_VIEW_ID = 'generated'
+
 export type LibraryPartDefinition = {
   id: string
   name: string
   category: PartCategory
+  /**
+    * Discriminator for how the part should be rendered. Defaults to the
+    * existing image-based module behaviour for backwards compatibility.
+    */
+  kind?: LibraryPartKind
   manufacturer?: string
   modelNumber?: string
   aliases: string[]
@@ -140,6 +157,8 @@ export type LibraryPartDefinition = {
   logicalPins: LogicalPin[]
   physicalPoints: PhysicalPoint[]
   resources: PartResource[]
+  /** Populated when `kind === 'generated-passive'`. */
+  passive?: GeneratedPassiveSpec
   createdAt: string
   updatedAt: string
 }
@@ -147,7 +166,7 @@ export type LibraryPartDefinition = {
 type LibraryPartDraft = Partial<
   Omit<
     LibraryPartDefinition,
-    'aliases' | 'dimensions' | 'imageViews' | 'logicalPins' | 'physicalPoints' | 'resources'
+    'aliases' | 'dimensions' | 'imageViews' | 'logicalPins' | 'physicalPoints' | 'resources' | 'passive'
   >
 > & {
   aliases?: string[]
@@ -156,7 +175,13 @@ type LibraryPartDraft = Partial<
   logicalPins?: LogicalPin[]
   physicalPoints?: PhysicalPoint[]
   resources?: PartResource[]
+  passive?: GeneratedPassiveSpec
 }
+
+// Forward declaration consumed in this module. The full structural type is
+// defined in `generatedPassive.ts` to keep passive-specific concerns out of
+// the core library model.
+export type GeneratedPassiveSpec = import('./generatedPassive').GeneratedPassiveSpec
 
 function createId(prefix: string) {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -231,6 +256,9 @@ export function cloneLibraryPart(part: LibraryPartDefinition): LibraryPartDefini
     logicalPins: part.logicalPins.map(cloneLogicalPin),
     physicalPoints: part.physicalPoints.map(clonePhysicalPoint),
     resources: part.resources.map(clonePartResource),
+    passive: part.passive
+      ? (JSON.parse(JSON.stringify(part.passive)) as GeneratedPassiveSpec)
+      : undefined,
   }
 }
 
@@ -245,6 +273,7 @@ export function createEmptyLibraryPart(draft: LibraryPartDraft = {}): LibraryPar
     id: draft.id ?? createLibraryPartId(),
     name: draft.name ?? 'Untitled module',
     category: draft.category ?? 'module',
+    kind: draft.kind ?? 'image-module',
     manufacturer: draft.manufacturer,
     modelNumber: draft.modelNumber,
     aliases: draft.aliases ? [...draft.aliases] : [],
@@ -254,6 +283,9 @@ export function createEmptyLibraryPart(draft: LibraryPartDraft = {}): LibraryPar
     logicalPins: draft.logicalPins?.map(cloneLogicalPin) ?? [],
     physicalPoints: draft.physicalPoints?.map(clonePhysicalPoint) ?? [],
     resources: draft.resources?.map(clonePartResource) ?? [],
+    passive: draft.passive
+      ? (JSON.parse(JSON.stringify(draft.passive)) as GeneratedPassiveSpec)
+      : undefined,
     createdAt: draft.createdAt ?? timestamp,
     updatedAt: draft.updatedAt ?? timestamp,
   }

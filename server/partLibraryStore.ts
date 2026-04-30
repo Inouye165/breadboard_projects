@@ -3,11 +3,14 @@ import path from 'node:path'
 
 import {
   IMAGE_VIEW_SIDES,
+  LIBRARY_PART_KINDS,
   PART_CATEGORIES,
   PART_RESOURCE_KINDS,
   PHYSICAL_POINT_KINDS,
+  type GeneratedPassiveSpec,
   type ImageViewSide,
   type LibraryPartDefinition,
+  type LibraryPartKind,
   type LogicalPin,
   type PartCategory,
   type PartImageCalibration,
@@ -185,6 +188,7 @@ function normalizeLibraryPart(
     id: value.id,
     name: value.name,
     category: value.category,
+    kind: isOneOf<LibraryPartKind>(value.kind, LIBRARY_PART_KINDS) ? value.kind : undefined,
     manufacturer: asOptionalString(value.manufacturer),
     modelNumber: asOptionalString(value.modelNumber),
     aliases: asStringArray(value.aliases),
@@ -200,6 +204,7 @@ function normalizeLibraryPart(
       ? value.physicalPoints.map(normalizePhysicalPoint)
       : [],
     resources: Array.isArray(value.resources) ? value.resources.map(normalizeResource) : [],
+    passive: isRecord(value.passive) ? (value.passive as unknown as GeneratedPassiveSpec) : undefined,
     createdAt,
     updatedAt,
   }

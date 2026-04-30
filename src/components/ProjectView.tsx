@@ -15,6 +15,7 @@ import {
   computeElectricallyConnectedPinIds,
 } from '../lib/modulePinAlignment'
 import type { LibraryPartDefinition } from '../lib/partLibraryModel'
+import { GeneratedPassiveGraphic } from './GeneratedPassiveSvg'
 
 type ProjectViewProps = {
   project: BreadboardProject
@@ -221,7 +222,13 @@ export function ProjectView({ project, breadboard, libraryParts = [], status, on
                     transform={`rotate(${instance.rotationDeg} ${instance.centerX} ${instance.centerY})`}
                     aria-label={`Module ${part.name}`}
                   >
-                    {view ? (
+                    {part.kind === 'generated-passive' && part.passive ? (
+                      <g
+                        transform={`translate(${instance.centerX - widthPx / 2} ${instance.centerY - heightPx / 2})`}
+                      >
+                        <GeneratedPassiveGraphic spec={part.passive} pixelsPerMm={pixelsPerMm} />
+                      </g>
+                    ) : view ? (
                       <image
                         href={view.imagePath}
                         x={instance.centerX - widthPx / 2}
