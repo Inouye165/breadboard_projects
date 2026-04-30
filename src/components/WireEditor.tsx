@@ -255,6 +255,7 @@ export function WireEditor({
     firstPinId: string | null
     message: string
   } | null>(null)
+  const [placementPointer, setPlacementPointer] = useState<WireVertex | null>(null)
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
   const pixelsPerMm = useMemo(() => estimatePixelsPerMm(breadboard), [breadboard])
@@ -467,10 +468,11 @@ export function WireEditor({
     setPendingFromPointId(null)
     setSelectedModuleId(null)
     const spacing = getPassiveLeadSpacingMm(part)
+    setPlacementPointer(null)
     setPlacement({
       libraryPartId,
       firstPinId: null,
-      message: `Placing ${part.name}: click two breadboard pins ${spacing.toFixed(2)} mm apart.`,
+      message: `Placing ${part.name} (lead spacing ${spacing.toFixed(2)} mm). Click the first pin.`,
     })
   }
 
@@ -505,12 +507,12 @@ export function WireEditor({
     }
     const distMm = Math.hypot(b.x - a.x, b.y - a.y) / pixelsPerMm
     const required = getPassiveLeadSpacingMm(part)
-    const tolMm = 0.6
+    const tolMm = 2.5
     if (Math.abs(distMm - required) > tolMm) {
       setPlacement({
         ...placement,
         firstPinId: null,
-        message: `Those pins are ${distMm.toFixed(2)} mm apart but ${part.name} needs ${required.toFixed(2)} mm (±${tolMm.toFixed(1)} mm). Pick a different pair.`,
+        message: `Those pins are ${distMm.toFixed(2)} mm apart but ${part.name} needs about ${required.toFixed(2)} mm (±${tolMm.toFixed(1)} mm of lead flex). Pick a different pair.`,
       })
       return
     }
@@ -530,10 +532,22 @@ export function WireEditor({
     })
     setSelectedModuleId(newModule.id)
     setPlacement(null)
+    setPlacementPointer(null)
   }
 
   function cancelPlacement() {
     setPlacement(null)
+    setPlacementPointer(null)
+  }
+
+  function handleSvgPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (!placement) return
+    const pos = getSvgCoordinates(event)
+    if (pos) setPlacementPointer(pos)
+  }
+
+  function handleSvgPointerLeave() {
+    if (placement) setPlacementPointer(null)
   }
 
   function handleRemoveModule(moduleId: string) {
@@ -1053,6 +1067,9 @@ export function WireEditor({
             viewBox={`0 0 ${safeWidth} ${safeHeight}`}
             role="img"
             aria-label={`Breadboard wiring canvas with ${project.wires.length} wires`}
+            onPointerMove={handleSvgPointerMove}
+            onPointerLeave={handleSvgPointerLeave}
+            style={placement ? { cursor: 'crosshair' } : undefined}
           >
             <image
               href={breadboard.imagePath}
@@ -1633,6 +1650,45 @@ export function WireEditor({
                 </g>
               )
             })}
+            {(() => {
+              if (!placement || !placementPointer) return null
+              const part = libraryPartIndex.get(placement.libraryPartId)
+              if (!part || part.kind !== 'generated-passive' || !part.passive) return null
+              const widthPx = part.dimensions.widthMm * pixelsPerMm
+              const heightPx = part.dimensions.heightMm * pixelsPerMm
+              if (widthPx <= 0 || heightPx <= 0) return null
+              let center = placementPointer
+              let rotationDeg = 0
+              if (placement.firstPinId) {
+                const a = findPoint(breadboard.points, placement.firstPinId)
+                if (a) {
+                  center = { x: (a.x + placementPointer.x) / 2, y: (a.y + placementPointer.y) / 2 }
+                  rotationDeg = (Math.atan2(placementPointer.y - a.y, placementPointer.x - a.x) * 180) / Math.PI
+                }
+              }
+              return (
+                <g
+                  className="wire-editor__placement-ghost"
+                  transform={`rotate(${rotationDeg} ${center.x} ${center.y})`}
+                  pointerEvents="none"
+                  style={{ opacity: 0.75 }}
+                >
+                  <g transform={`translate(${center.x - widthPx / 2} ${center.y - heightPx / 2})`}>
+                    <GeneratedPassiveGraphic spec={part.passive} pixelsPerMm={pixelsPerMm} />
+                  </g>
+                  <rect
+                    x={center.x - widthPx / 2}
+                    y={center.y - heightPx / 2}
+                    width={widthPx}
+                    height={heightPx}
+                    fill="transparent"
+                    stroke="#1f8e4d"
+                    strokeWidth={2}
+                    strokeDasharray="6 3"
+                  />
+                </g>
+              )
+            })()}
           </svg>
         </div>
       </section>
