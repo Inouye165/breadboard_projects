@@ -30,6 +30,16 @@ import {
   type PartCategory,
   type PhysicalPoint,
 } from '../lib/partLibraryModel'
+import { GeneratedPassiveGraphic } from './GeneratedPassiveSvg'
+
+/** Distance between the two leads of a generated passive part, in millimeters. */
+function getPassiveLeadSpacingMm(part: LibraryPartDefinition): number {
+  const leads = part.physicalPoints
+  if (leads.length < 2) return 0
+  const dx = leads[0].xMm - leads[1].xMm
+  const dy = leads[0].yMm - leads[1].yMm
+  return Math.sqrt(dx * dx + dy * dy)
+}
 
 const WIRE_COLORS = ['#cc3333', '#1f8e4d', '#1f5fcc', '#e08a00', '#7a3fc6', '#000000']
 
@@ -238,6 +248,11 @@ export function WireEditor({
   const [moduleDragState, setModuleDragState] = useState<ModuleDragState | null>(null)
   const [showPinLabels, setShowPinLabels] = useState(false)
   const [showRails, setShowRails] = useState(false)
+  const [placement, setPlacement] = useState<{
+    libraryPartId: string
+    firstPinId: string | null
+    message: string
+  } | null>(null)
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
   const pixelsPerMm = useMemo(() => estimatePixelsPerMm(breadboard), [breadboard])
@@ -298,6 +313,11 @@ export function WireEditor({
 
   function handlePinClick(pointId: string) {
     setPendingRemovalWireId(null)
+
+    if (placement) {
+      handlePassivePinClick(pointId)
+      return
+    }
 
     if (pendingFromPointId === null) {
       setPendingFromPointId(pointId)
@@ -418,6 +438,11 @@ export function WireEditor({
       return
     }
 
+    if (part.kind === 'generated-passive') {
+      startPassivePlacement(libraryPartId)
+      return
+    }
+
     const newModule: ProjectModuleInstance = {
       id: createProjectModuleInstanceId(),
       libraryPartId,
@@ -432,6 +457,81 @@ export function WireEditor({
       modules: [...(project.modules ?? []), newModule],
     })
     setSelectedModuleId(newModule.id)
+  }
+
+  function startPassivePlacement(libraryPartId: string) {
+    const part = libraryPartIndex.get(libraryPartId)
+    if (!part || part.kind !== 'generated-passive') return
+    setPendingFromPointId(null)
+    setSelectedModuleId(null)
+    const spacing = getPassiveLeadSpacingMm(part)
+    setPlacement({
+      libraryPartId,
+      firstPinId: null,
+      message: `Placing ${part.name}: click two breadboard pins ${spacing.toFixed(2)} mm apart.`,
+    })
+  }
+
+  function handlePassivePinClick(pointId: string) {
+    if (!placement) return
+    const part = libraryPartIndex.get(placement.libraryPartId)
+    if (!part) {
+      setPlacement(null)
+      return
+    }
+    if (placement.firstPinId === null) {
+      setPlacement({
+        ...placement,
+        firstPinId: pointId,
+        message: `First pin selected. Click the second pin (${getPassiveLeadSpacingMm(part).toFixed(2)} mm away).`,
+      })
+      return
+    }
+    if (placement.firstPinId === pointId) {
+      setPlacement({
+        ...placement,
+        firstPinId: null,
+        message: `Selection cleared. Click two breadboard pins ${getPassiveLeadSpacingMm(part).toFixed(2)} mm apart.`,
+      })
+      return
+    }
+    const a = findPoint(breadboard.points, placement.firstPinId)
+    const b = findPoint(breadboard.points, pointId)
+    if (!a || !b) {
+      setPlacement(null)
+      return
+    }
+    const distMm = Math.hypot(b.x - a.x, b.y - a.y) / pixelsPerMm
+    const required = getPassiveLeadSpacingMm(part)
+    const tolMm = 0.6
+    if (Math.abs(distMm - required) > tolMm) {
+      setPlacement({
+        ...placement,
+        firstPinId: null,
+        message: `Those pins are ${distMm.toFixed(2)} mm apart but ${part.name} needs ${required.toFixed(2)} mm (±${tolMm.toFixed(1)} mm). Pick a different pair.`,
+      })
+      return
+    }
+    const centerX = (a.x + b.x) / 2
+    const centerY = (a.y + b.y) / 2
+    const rotationDeg = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI
+    const newModule: ProjectModuleInstance = {
+      id: createProjectModuleInstanceId(),
+      libraryPartId: placement.libraryPartId,
+      centerX,
+      centerY,
+      rotationDeg,
+    }
+    onChange({
+      ...project,
+      modules: [...(project.modules ?? []), newModule],
+    })
+    setSelectedModuleId(newModule.id)
+    setPlacement(null)
+  }
+
+  function cancelPlacement() {
+    setPlacement(null)
   }
 
   function handleRemoveModule(moduleId: string) {
@@ -859,6 +959,31 @@ export function WireEditor({
         <div className="pin-editor__title-block">
           <p className="image-workspace__eyebrow">Project mode - wire two points</p>
           <p className="image-workspace__status">{status}</p>
+          {placement ? (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                marginTop: 6,
+                padding: '6px 10px',
+                background: '#fff7d6',
+                border: '1px solid #d8b94a',
+                borderRadius: 6,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span style={{ flex: 1, fontSize: 13 }}>{placement.message}</span>
+              <button
+                type="button"
+                className="action-button action-button--ghost"
+                onClick={cancelPlacement}
+              >
+                Cancel placement
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="pin-editor__controls">
           <label className="control-group" htmlFor="wire-editor-project-name">
@@ -1129,7 +1254,13 @@ export function WireEditor({
                   aria-label={`Module ${part.name} (${part.category})`}
                   style={{ cursor: 'move' }}
                 >
-                  {view ? (
+                  {part.kind === 'generated-passive' && part.passive ? (
+                    <g
+                      transform={`translate(${center.x - widthPx / 2} ${center.y - heightPx / 2})`}
+                    >
+                      <GeneratedPassiveGraphic spec={part.passive} pixelsPerMm={effectivePpm} />
+                    </g>
+                  ) : view ? (
                     <image
                       href={view.imagePath}
                       x={center.x - widthPx / 2}
@@ -1555,7 +1686,9 @@ function ComponentsPanel({ components, isBusy, onAdd, onRemove }: ComponentsPane
       <header className="components-panel__header">
         <h2 className="components-panel__title">Components</h2>
         <p className="components-panel__hint">
-          Track resistors, LEDs, and other parts you place on the breadboard.
+          Track resistors, LEDs, and other parts you place on the breadboard. To actually drop a
+          generated resistor or capacitor onto the board, scroll to <strong>Modules</strong> below
+          and choose <strong>Place between two pins</strong>.
         </p>
       </header>
       <form className="components-panel__form" onSubmit={handleSubmit}>
@@ -1709,8 +1842,9 @@ function ModulesPanel({
         <h2 className="components-panel__title">Modules</h2>
         <p className="components-panel__hint">
           Place sensors, microcontrollers, and other library modules. Drag to position, rotate to
-          fit, and align to the nearest pin hole. All modules render at the breadboard&apos;s
-          physical scale.
+          fit, and align to the nearest pin hole. Generated resistors and capacitors switch into a
+          two-pin placement mode and only fit on pin pairs that match their lead spacing. All
+          modules render at the breadboard&apos;s physical scale.
         </p>
       </header>
       {placeableParts.length === 0 ? (
@@ -1760,7 +1894,9 @@ function ModulesPanel({
             onClick={handleAdd}
             disabled={isBusy || !effectivePartId}
           >
-            Add module
+            {partIndex.get(effectivePartId)?.kind === 'generated-passive'
+              ? 'Place between two pins'
+              : 'Add module'}
           </button>
         </div>
       )}
