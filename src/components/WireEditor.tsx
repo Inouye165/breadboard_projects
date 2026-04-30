@@ -41,6 +41,53 @@ function getPassiveLeadSpacingMm(part: LibraryPartDefinition): number {
   return Math.sqrt(dx * dx + dy * dy)
 }
 
+/**
+ * The acceptable range of pin-to-pin distance (in mm) for placing a generated
+ * passive part. The minimum is the rigid body length — the part can't be
+ * compressed below that. The maximum reflects how far the leads can be
+ * straightened or bent without becoming impractical. Leads can be cut to fit,
+ * so the user is encouraged to pick the shortest pair within the range.
+ */
+function getPassiveLeadDistanceRangeMm(part: LibraryPartDefinition): {
+  minMm: number
+  maxMm: number
+  rigid: boolean
+} {
+  const natural = getPassiveLeadSpacingMm(part)
+  const spec = part.passive
+  if (!spec) {
+    return { minMm: natural, maxMm: natural, rigid: true }
+  }
+  if (spec.passiveType === 'resistor') {
+    const r = spec.physical
+    if (r.mounting === 'smd-chip') {
+      return { minMm: natural, maxMm: natural, rigid: true }
+    }
+    // Axial / ceramic-power: leads can be straightened up to bodyLength + 2 * leadLength
+    // and bent inward only as far as the body itself.
+    const body = Math.max(r.bodyLengthMm, 0.1)
+    const lead = 'leadLengthMm' in r ? r.leadLengthMm : 25
+    return { minMm: body + 0.5, maxMm: body + 2 * lead, rigid: false }
+  }
+  // Capacitor
+  const c = spec.physical
+  if (c.mounting === 'smd') {
+    return { minMm: natural, maxMm: natural, rigid: true }
+  }
+  if (c.mounting === 'through-hole-axial') {
+    const body = Math.max(c.bodyLengthMm, 0.1)
+    const lead = c.leadLengthMm
+    return { minMm: body + 0.5, maxMm: body + 2 * lead, rigid: false }
+  }
+  // Radial / ceramic-disc: rigid body footprint with bendable leads.
+  const lead = c.leadLengthMm
+  return {
+    minMm: Math.max(natural - lead * 0.6, 0.5),
+    maxMm: natural + lead * 1.2,
+    rigid: false,
+  }
+}
+
 const WIRE_COLORS = ['#cc3333', '#1f8e4d', '#1f5fcc', '#e08a00', '#7a3fc6', '#000000']
 
 /** Parse a #rgb or #rrggbb hex color into [r,g,b] (0-255). Returns null for unknown formats. */
@@ -467,12 +514,14 @@ export function WireEditor({
     if (!part || part.kind !== 'generated-passive') return
     setPendingFromPointId(null)
     setSelectedModuleId(null)
-    const spacing = getPassiveLeadSpacingMm(part)
+    const range = getPassiveLeadDistanceRangeMm(part)
     setPlacementPointer(null)
     setPlacement({
       libraryPartId,
       firstPinId: null,
-      message: `Placing ${part.name} (lead spacing ${spacing.toFixed(2)} mm). Click the first pin.`,
+      message: range.rigid
+        ? `Placing ${part.name} (rigid, ${getPassiveLeadSpacingMm(part).toFixed(2)} mm). Click the first pin.`
+        : `Placing ${part.name}. Body is ${range.minMm.toFixed(1)} mm; leads reach up to ${range.maxMm.toFixed(1)} mm. Click the first pin.`,
     })
   }
 
@@ -483,11 +532,15 @@ export function WireEditor({
       setPlacement(null)
       return
     }
+    const range = getPassiveLeadDistanceRangeMm(part)
+    const natural = getPassiveLeadSpacingMm(part)
     if (placement.firstPinId === null) {
       setPlacement({
         ...placement,
         firstPinId: pointId,
-        message: `First pin selected. Click the second pin (${getPassiveLeadSpacingMm(part).toFixed(2)} mm away).`,
+        message: range.rigid
+          ? `First pin selected. Click the second pin exactly ${natural.toFixed(2)} mm away.`
+          : `First pin selected. Click any second pin between ${range.minMm.toFixed(1)} and ${range.maxMm.toFixed(1)} mm away (highlighted). Shorter is better.`,
       })
       return
     }
@@ -495,7 +548,7 @@ export function WireEditor({
       setPlacement({
         ...placement,
         firstPinId: null,
-        message: `Selection cleared. Click two breadboard pins ${getPassiveLeadSpacingMm(part).toFixed(2)} mm apart.`,
+        message: `Selection cleared. Click the first pin for ${part.name}.`,
       })
       return
     }
@@ -506,13 +559,19 @@ export function WireEditor({
       return
     }
     const distMm = Math.hypot(b.x - a.x, b.y - a.y) / pixelsPerMm
-    const required = getPassiveLeadSpacingMm(part)
-    const tolMm = 2.5
-    if (Math.abs(distMm - required) > tolMm) {
+    if (distMm < range.minMm) {
       setPlacement({
         ...placement,
         firstPinId: null,
-        message: `Those pins are ${distMm.toFixed(2)} mm apart but ${part.name} needs about ${required.toFixed(2)} mm (±${tolMm.toFixed(1)} mm of lead flex). Pick a different pair.`,
+        message: `Those pins are only ${distMm.toFixed(2)} mm apart but the ${part.name} body is ${range.minMm.toFixed(2)} mm long and won't fit. Pick a wider pair.`,
+      })
+      return
+    }
+    if (distMm > range.maxMm) {
+      setPlacement({
+        ...placement,
+        firstPinId: null,
+        message: `Those pins are ${distMm.toFixed(2)} mm apart, more than the ${range.maxMm.toFixed(1)} mm reach of ${part.name}'s leads. Pick a closer pair.`,
       })
       return
     }
@@ -871,6 +930,44 @@ export function WireEditor({
     () => computeElectricallyConnectedPinIds(alignedPinIds, breadboard, project.wires),
     [alignedPinIds, breadboard, project.wires],
   )
+  /**
+   * Pin holes that are valid landing spots for the passive currently being
+   * placed. When no first pin has been chosen yet, every snap-eligible pin
+   * is a candidate as long as at least one partner pin lies within reach.
+   * Once the first pin is committed, only pins inside the lead-distance
+   * range of that pin remain candidates.
+   */
+  const placementCandidatePinIds = useMemo(() => {
+    const set = new Set<string>()
+    if (!placement) return set
+    const part = libraryPartIndex.get(placement.libraryPartId)
+    if (!part) return set
+    const range = getPassiveLeadDistanceRangeMm(part)
+    const minPx = range.minMm * pixelsPerMm
+    const maxPx = range.maxMm * pixelsPerMm
+    if (placement.firstPinId) {
+      const a = findPoint(breadboard.points, placement.firstPinId)
+      if (!a) return set
+      for (const p of breadboard.points) {
+        if (p.id === a.id) continue
+        const d = Math.hypot(p.x - a.x, p.y - a.y)
+        if (d >= minPx && d <= maxPx) set.add(p.id)
+      }
+    } else {
+      // First-pin selection: include any pin that has at least one partner in range.
+      for (const p of breadboard.points) {
+        for (const q of breadboard.points) {
+          if (p.id === q.id) continue
+          const d = Math.hypot(p.x - q.x, p.y - q.y)
+          if (d >= minPx && d <= maxPx) {
+            set.add(p.id)
+            break
+          }
+        }
+      }
+    }
+    return set
+  }, [placement, libraryPartIndex, breadboard.points, pixelsPerMm])
   // Rails depict only the breadboard's intrinsic conductive strips; user
   // wires are rendered separately and would otherwise produce long diagonal
   // polylines spanning two unrelated regions of the board.
@@ -1592,25 +1689,40 @@ export function WireEditor({
               const isAligned = alignedPinIds.has(point.id)
               const isConnected = connectedPinIds.has(point.id)
               const isCovered = coveredPinIds.has(point.id)
+              const isPlacementFirst = placement?.firstPinId === point.id
+              const isPlacementCandidate = placementCandidatePinIds.has(point.id)
+              const forcedVisible = isPendingFrom || isSnapTarget || isPlacementFirst || isPlacementCandidate
               // When a module pin is plugged into this hole, the module's own
               // green pin dot serves as the visual indicator. Rendering the
               // breadboard hole on top would just paint red over the green.
-              if (isAligned && !isPendingFrom && !isSnapTarget) {
+              if (isAligned && !forcedVisible) {
                 return null
               }
-              if (isCovered && !isPendingFrom && !isSnapTarget) {
+              if (isCovered && !forcedVisible) {
                 return null
               }
               // A real jumper wire physically blocks the view of any hole it
               // sits over. Hide pin-hole circles whose center lies under the
               // wire body so the rendered wire reads as solid plastic.
-              if (wireCoveredPinIds.has(point.id) && !isPendingFrom && !isSnapTarget) {
+              if (wireCoveredPinIds.has(point.id) && !forcedVisible) {
                 return null
               }
               const pinRadius = radius
 
               return (
                 <g key={point.id} className="pin-editor__pin-group">
+                  {isPlacementCandidate || isPlacementFirst ? (
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r={radius * 2.4}
+                      fill={isPlacementFirst ? 'rgba(31, 142, 77, 0.35)' : 'rgba(255, 196, 0, 0.28)'}
+                      stroke={isPlacementFirst ? '#1f8e4d' : '#d68f00'}
+                      strokeWidth={isPlacementFirst ? 2.5 : 1.5}
+                      pointerEvents="none"
+                      aria-hidden="true"
+                    />
+                  ) : null}
                   {isSnapTarget ? (
                     <circle
                       className="wire-editor__snap-target"
