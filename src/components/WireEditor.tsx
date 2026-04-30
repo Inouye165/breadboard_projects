@@ -21,6 +21,7 @@ import {
   computeCoveredBreadboardPinIds,
   computeElectricalGroups,
   computeElectricallyConnectedPinIds,
+  getInstanceSnapPointsWorld,
   getPhysicalPointModuleOffsetPx,
   getViewForPoint,
 } from '../lib/modulePinAlignment'
@@ -30,6 +31,63 @@ import {
   type PartCategory,
   type PhysicalPoint,
 } from '../lib/partLibraryModel'
+import { GeneratedPassiveGraphic } from './GeneratedPassiveSvg'
+
+/** Distance between the two leads of a generated passive part, in millimeters. */
+function getPassiveLeadSpacingMm(part: LibraryPartDefinition): number {
+  const leads = part.physicalPoints
+  if (leads.length < 2) return 0
+  const dx = leads[0].xMm - leads[1].xMm
+  const dy = leads[0].yMm - leads[1].yMm
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+/**
+ * The acceptable range of pin-to-pin distance (in mm) for placing a generated
+ * passive part. The minimum is the rigid body length — the part can't be
+ * compressed below that. The maximum reflects how far the leads can be
+ * straightened or bent without becoming impractical. Leads can be cut to fit,
+ * so the user is encouraged to pick the shortest pair within the range.
+ */
+function getPassiveLeadDistanceRangeMm(part: LibraryPartDefinition): {
+  minMm: number
+  maxMm: number
+  rigid: boolean
+} {
+  const natural = getPassiveLeadSpacingMm(part)
+  const spec = part.passive
+  if (!spec) {
+    return { minMm: natural, maxMm: natural, rigid: true }
+  }
+  if (spec.passiveType === 'resistor') {
+    const r = spec.physical
+    if (r.mounting === 'smd-chip') {
+      return { minMm: natural, maxMm: natural, rigid: true }
+    }
+    // Axial / ceramic-power: leads can be straightened up to bodyLength + 2 * leadLength
+    // and bent inward only as far as the body itself.
+    const body = Math.max(r.bodyLengthMm, 0.1)
+    const lead = 'leadLengthMm' in r ? r.leadLengthMm : 25
+    return { minMm: body + 0.5, maxMm: body + 2 * lead, rigid: false }
+  }
+  // Capacitor
+  const c = spec.physical
+  if (c.mounting === 'smd') {
+    return { minMm: natural, maxMm: natural, rigid: true }
+  }
+  if (c.mounting === 'through-hole-axial') {
+    const body = Math.max(c.bodyLengthMm, 0.1)
+    const lead = c.leadLengthMm
+    return { minMm: body + 0.5, maxMm: body + 2 * lead, rigid: false }
+  }
+  // Radial / ceramic-disc: rigid body footprint with bendable leads.
+  const lead = c.leadLengthMm
+  return {
+    minMm: Math.max(natural - lead * 0.6, 0.5),
+    maxMm: natural + lead * 1.2,
+    rigid: false,
+  }
+}
 
 const WIRE_COLORS = ['#cc3333', '#1f8e4d', '#1f5fcc', '#e08a00', '#7a3fc6', '#000000']
 
@@ -109,6 +167,7 @@ type WireEditorProps = {
   status: string
   onBack: () => void
   onChange: (project: BreadboardProject) => void
+  onCreatePassive?: () => void
 }
 
 type WireVertex = {
@@ -132,6 +191,31 @@ type ModuleDragState = {
   snappedPosition: WireVertex | null
   /** Breadboard pin being targeted for snap, or null. */
   snapPinId: string | null
+}
+
+/**
+ * Active drag of a single contact endpoint of a placed generated-passive
+ * module. The opposite endpoint stays anchored at its original pin, the body
+ * remains at its native size, and the leads on both sides recompute so the
+ * body stays centred between the two contacts.
+ */
+type PassiveEndpointDragState = {
+  moduleId: string
+  /**
+   * Which endpoint of the part the user grabbed: 'a' is the part-local
+   * "minus" end (left when un-rotated), 'b' is the "plus" end. Used to
+   * orient the recomputed rotation so the grabbed handle stays at the
+   * cursor position rather than visually teleporting to the opposite side.
+   */
+  end: 'a' | 'b'
+  /** Anchor endpoint (world SVG coords) — does not move during the drag. */
+  anchor: WireVertex
+  /** Current draggable endpoint position (world SVG coords). */
+  draggedPos: WireVertex
+  /** Pin currently snapped to (highlighted), or null if free-floating. */
+  snapPinId: string | null
+  /** True if the resulting body+leads geometry is achievable. */
+  valid: boolean
 }
 
 function nextWireColor(wires: Wire[]) {
@@ -228,6 +312,7 @@ export function WireEditor({
   status,
   onBack,
   onChange,
+  onCreatePassive,
 }: WireEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [pendingFromPointId, setPendingFromPointId] = useState<string | null>(null)
@@ -236,8 +321,15 @@ export function WireEditor({
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null)
   const [moduleDragState, setModuleDragState] = useState<ModuleDragState | null>(null)
+  const [passiveEndpointDrag, setPassiveEndpointDrag] = useState<PassiveEndpointDragState | null>(null)
   const [showPinLabels, setShowPinLabels] = useState(false)
   const [showRails, setShowRails] = useState(false)
+  const [placement, setPlacement] = useState<{
+    libraryPartId: string
+    firstPinId: string | null
+    message: string
+  } | null>(null)
+  const [placementPointer, setPlacementPointer] = useState<WireVertex | null>(null)
   const safeWidth = breadboard.imageWidth > 0 ? breadboard.imageWidth : 1
   const safeHeight = breadboard.imageHeight > 0 ? breadboard.imageHeight : 1
   const pixelsPerMm = useMemo(() => estimatePixelsPerMm(breadboard), [breadboard])
@@ -298,6 +390,11 @@ export function WireEditor({
 
   function handlePinClick(pointId: string) {
     setPendingRemovalWireId(null)
+
+    if (placement) {
+      handlePassivePinClick(pointId)
+      return
+    }
 
     if (pendingFromPointId === null) {
       setPendingFromPointId(pointId)
@@ -418,6 +515,11 @@ export function WireEditor({
       return
     }
 
+    if (part.kind === 'generated-passive') {
+      startPassivePlacement(libraryPartId)
+      return
+    }
+
     const newModule: ProjectModuleInstance = {
       id: createProjectModuleInstanceId(),
       libraryPartId,
@@ -432,6 +534,150 @@ export function WireEditor({
       modules: [...(project.modules ?? []), newModule],
     })
     setSelectedModuleId(newModule.id)
+  }
+
+  function startPassivePlacement(libraryPartId: string) {
+    const part = libraryPartIndex.get(libraryPartId)
+    if (!part || part.kind !== 'generated-passive') return
+    setPendingFromPointId(null)
+    setSelectedModuleId(null)
+    const range = getPassiveLeadDistanceRangeMm(part)
+    setPlacementPointer(null)
+    setPlacement({
+      libraryPartId,
+      firstPinId: null,
+      message: range.rigid
+        ? `Placing ${part.name} (rigid, ${getPassiveLeadSpacingMm(part).toFixed(2)} mm). Click the first pin.`
+        : `Placing ${part.name}. Body is ${range.minMm.toFixed(1)} mm; leads reach up to ${range.maxMm.toFixed(1)} mm. Click the first pin.`,
+    })
+  }
+
+  function handlePassivePinClick(pointId: string) {
+    if (!placement) return
+    const part = libraryPartIndex.get(placement.libraryPartId)
+    if (!part) {
+      setPlacement(null)
+      return
+    }
+    const range = getPassiveLeadDistanceRangeMm(part)
+    const natural = getPassiveLeadSpacingMm(part)
+    if (placement.firstPinId === null) {
+      setPlacement({
+        ...placement,
+        firstPinId: pointId,
+        message: range.rigid
+          ? `First pin selected. Click the second pin exactly ${natural.toFixed(2)} mm away.`
+          : `First pin selected. Click any second pin between ${range.minMm.toFixed(1)} and ${range.maxMm.toFixed(1)} mm away (highlighted). Shorter is better.`,
+      })
+      return
+    }
+    if (placement.firstPinId === pointId) {
+      setPlacement({
+        ...placement,
+        firstPinId: null,
+        message: `Selection cleared. Click the first pin for ${part.name}.`,
+      })
+      return
+    }
+    const a = findPoint(breadboard.points, placement.firstPinId)
+    const b = findPoint(breadboard.points, pointId)
+    if (!a || !b) {
+      setPlacement(null)
+      return
+    }
+    const distMm = Math.hypot(b.x - a.x, b.y - a.y) / pixelsPerMm
+    if (distMm < range.minMm) {
+      setPlacement({
+        ...placement,
+        firstPinId: null,
+        message: `Those pins are only ${distMm.toFixed(2)} mm apart but the ${part.name} body is ${range.minMm.toFixed(2)} mm long and won't fit. Pick a wider pair.`,
+      })
+      return
+    }
+    if (distMm > range.maxMm) {
+      setPlacement({
+        ...placement,
+        firstPinId: null,
+        message: `Those pins are ${distMm.toFixed(2)} mm apart, more than the ${range.maxMm.toFixed(1)} mm reach of ${part.name}'s leads. Pick a closer pair.`,
+      })
+      return
+    }
+    const centerX = (a.x + b.x) / 2
+    const centerY = (a.y + b.y) / 2
+    const rotationDeg = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI
+    const newModule: ProjectModuleInstance = {
+      id: createProjectModuleInstanceId(),
+      libraryPartId: placement.libraryPartId,
+      centerX,
+      centerY,
+      rotationDeg,
+      passiveSpanMm: distMm,
+    }
+    onChange({
+      ...project,
+      modules: [...(project.modules ?? []), newModule],
+    })
+    setSelectedModuleId(newModule.id)
+    setPlacement(null)
+    setPlacementPointer(null)
+  }
+
+  function cancelPlacement() {
+    setPlacement(null)
+    setPlacementPointer(null)
+  }
+
+  function handleSvgPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (passiveEndpointDrag) {
+      const coords = getSvgCoordinates(event)
+      if (!coords) return
+      const instance = (project.modules ?? []).find((entry) => entry.id === passiveEndpointDrag.moduleId)
+      const part = instance ? libraryPartIndex.get(instance.libraryPartId) : undefined
+      if (!part) return
+      const { pos, snapPinId, valid } = snapPassiveEndpoint(part, passiveEndpointDrag.anchor, coords)
+      setPassiveEndpointDrag({
+        ...passiveEndpointDrag,
+        draggedPos: pos,
+        snapPinId,
+        valid,
+      })
+      return
+    }
+    if (!placement) return
+    const pos = getSvgCoordinates(event)
+    if (pos) setPlacementPointer(pos)
+  }
+
+  function handleSvgPointerUp(event: React.PointerEvent<SVGSVGElement>) {
+    if (!passiveEndpointDrag) return
+    const drag = passiveEndpointDrag
+    setPassiveEndpointDrag(null)
+    if (!drag.snapPinId || !drag.valid) return
+    void event
+    updateModule(drag.moduleId, (instance) => {
+      const a = drag.anchor
+      const b = drag.draggedPos
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const distPx = Math.hypot(dx, dy)
+      if (distPx <= 0) return instance
+      const distMm = distPx / pixelsPerMm
+      const rotationDeg =
+        drag.end === 'a'
+          ? (Math.atan2(a.y - b.y, a.x - b.x) * 180) / Math.PI
+          : (Math.atan2(dy, dx) * 180) / Math.PI
+      return {
+        ...instance,
+        centerX: (a.x + b.x) / 2,
+        centerY: (a.y + b.y) / 2,
+        rotationDeg,
+        passiveSpanMm: distMm,
+      }
+    })
+  }
+
+  function handleSvgPointerLeave() {
+    if (placement) setPlacementPointer(null)
   }
 
   function handleRemoveModule(moduleId: string) {
@@ -611,6 +857,93 @@ export function WireEditor({
     })
   }
 
+  /**
+   * World-coordinate positions of a generated-passive's two contact endpoints
+   * (the silver tips that physically plug into the breadboard). Returns null
+   * for non-passive parts or when the instance lacks a recorded span.
+   */
+  function getPassiveEndpoints(
+    instance: ProjectModuleInstance,
+  ): { a: WireVertex; b: WireVertex } | null {
+    const part = libraryPartIndex.get(instance.libraryPartId)
+    if (!part || part.kind !== 'generated-passive' || !part.passive) return null
+    const spanMm =
+      typeof instance.passiveSpanMm === 'number' && instance.passiveSpanMm > 0
+        ? instance.passiveSpanMm
+        : part.dimensions.widthMm
+    const halfPx = (spanMm * pixelsPerMm * (instance.scaleFactor ?? 1)) / 2
+    const angleRad = (instance.rotationDeg * Math.PI) / 180
+    const cosA = Math.cos(angleRad)
+    const sinA = Math.sin(angleRad)
+    return {
+      a: { x: instance.centerX - cosA * halfPx, y: instance.centerY - sinA * halfPx },
+      b: { x: instance.centerX + cosA * halfPx, y: instance.centerY + sinA * halfPx },
+    }
+  }
+
+  /**
+   * For a passive endpoint drag: snap the dragged pointer to the nearest
+   * breadboard pin within ~3 mm whose distance to the anchor falls inside
+   * the part's lead-distance range. Returns the (possibly snapped) world
+   * coords plus the snapped pin id and validity.
+   */
+  function snapPassiveEndpoint(
+    part: LibraryPartDefinition,
+    anchor: WireVertex,
+    pointer: WireVertex,
+  ): { pos: WireVertex; snapPinId: string | null; valid: boolean } {
+    const range = getPassiveLeadDistanceRangeMm(part)
+    const snapRadiusPx = pixelsPerMm * 3
+    let bestId: string | null = null
+    let bestDist = snapRadiusPx
+    let bestPin: WireVertex | null = null
+    for (const pin of breadboard.points) {
+      // Breadboard points use BreadboardPoint kinds ('breadboard-hole'|'pin'|
+      // 'rail') – not the PhysicalPoint shape that isSnapPoint() above is
+      // typed for. Allow the two conductive kinds; rails are continuous
+      // strips and aren't valid lead landing spots.
+      if (pin.kind === 'rail') continue
+      const d = Math.hypot(pin.x - pointer.x, pin.y - pointer.y)
+      if (d >= bestDist) continue
+      const distFromAnchorMm = Math.hypot(pin.x - anchor.x, pin.y - anchor.y) / pixelsPerMm
+      if (distFromAnchorMm < range.minMm || distFromAnchorMm > range.maxMm) continue
+      bestDist = d
+      bestId = pin.id
+      bestPin = { x: pin.x, y: pin.y }
+    }
+    if (bestPin && bestId) {
+      return { pos: bestPin, snapPinId: bestId, valid: true }
+    }
+    const freeDistMm = Math.hypot(pointer.x - anchor.x, pointer.y - anchor.y) / pixelsPerMm
+    return {
+      pos: pointer,
+      snapPinId: null,
+      valid: freeDistMm >= range.minMm && freeDistMm <= range.maxMm,
+    }
+  }
+
+  function handlePassiveEndpointPointerDown(
+    event: React.PointerEvent<SVGCircleElement>,
+    instance: ProjectModuleInstance,
+    end: 'a' | 'b',
+  ) {
+    if (event.button !== 0) return
+    event.stopPropagation()
+    const endpoints = getPassiveEndpoints(instance)
+    if (!endpoints) return
+    const anchor = end === 'a' ? endpoints.b : endpoints.a
+    const dragged = end === 'a' ? endpoints.a : endpoints.b
+    setSelectedModuleId(instance.id)
+    setPassiveEndpointDrag({
+      moduleId: instance.id,
+      end,
+      anchor,
+      draggedPos: dragged,
+      snapPinId: null,
+      valid: true,
+    })
+  }
+
   function handleInsertWaypoint(wire: Wire, segmentIndex: number, position: WireVertex) {
     const waypoints = wire.waypoints ? [...wire.waypoints] : []
     waypoints.splice(segmentIndex, 0, { x: position.x, y: position.y })
@@ -732,16 +1065,47 @@ export function WireEditor({
   )
 
   const effectiveModules = useMemo(() => {
-    if (!moduleDragState) {
-      return modules
+    let result = modules
+    if (moduleDragState) {
+      const dragCenter = moduleDragState.snappedPosition ?? moduleDragState.position
+      result = result.map((instance) =>
+        instance.id === moduleDragState.moduleId
+          ? { ...instance, centerX: dragCenter.x, centerY: dragCenter.y }
+          : instance,
+      )
     }
-    const dragCenter = moduleDragState.snappedPosition ?? moduleDragState.position
-    return modules.map((instance) =>
-      instance.id === moduleDragState.moduleId
-        ? { ...instance, centerX: dragCenter.x, centerY: dragCenter.y }
-        : instance,
-    )
-  }, [modules, moduleDragState])
+    if (passiveEndpointDrag) {
+      const a = passiveEndpointDrag.anchor
+      const b = passiveEndpointDrag.draggedPos
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const distPx = Math.hypot(dx, dy)
+      if (distPx > 0) {
+        const distMm = distPx / pixelsPerMm
+        // If the user grabbed end 'a' (the part-local "−" end), orient the
+        // body so that 'a' lands at draggedPos and the anchor lands at 'b'.
+        // If they grabbed 'b', vice versa. This keeps the grabbed handle
+        // visually attached to the cursor instead of jumping to the
+        // opposite side of the body.
+        const rotationDeg =
+          passiveEndpointDrag.end === 'a'
+            ? (Math.atan2(a.y - b.y, a.x - b.x) * 180) / Math.PI
+            : (Math.atan2(dy, dx) * 180) / Math.PI
+        result = result.map((instance) =>
+          instance.id === passiveEndpointDrag.moduleId
+            ? {
+                ...instance,
+                centerX: (a.x + b.x) / 2,
+                centerY: (a.y + b.y) / 2,
+                rotationDeg,
+                passiveSpanMm: distMm,
+              }
+            : instance,
+        )
+      }
+    }
+    return result
+  }, [modules, moduleDragState, passiveEndpointDrag, pixelsPerMm])
 
   const alignedPinIds = useMemo(
     () => computeAlignedBreadboardPinIds(effectiveModules, libraryPartIndex, breadboard.points, pixelsPerMm),
@@ -755,6 +1119,65 @@ export function WireEditor({
     () => computeElectricallyConnectedPinIds(alignedPinIds, breadboard, project.wires),
     [alignedPinIds, breadboard, project.wires],
   )
+  /**
+   * Pin holes that are valid landing spots for the passive currently being
+   * placed. When no first pin has been chosen yet, every snap-eligible pin
+   * is a candidate as long as at least one partner pin lies within reach.
+   * Once the first pin is committed, only pins inside the lead-distance
+   * range of that pin remain candidates.
+   */
+  const placementCandidatePinIds = useMemo(() => {
+    const set = new Set<string>()
+    if (!placement) return set
+    const part = libraryPartIndex.get(placement.libraryPartId)
+    if (!part) return set
+    const range = getPassiveLeadDistanceRangeMm(part)
+    const minPx = range.minMm * pixelsPerMm
+    const maxPx = range.maxMm * pixelsPerMm
+    if (placement.firstPinId) {
+      const a = findPoint(breadboard.points, placement.firstPinId)
+      if (!a) return set
+      for (const p of breadboard.points) {
+        if (p.id === a.id) continue
+        const d = Math.hypot(p.x - a.x, p.y - a.y)
+        if (d >= minPx && d <= maxPx) set.add(p.id)
+      }
+    } else {
+      // First-pin selection: include any pin that has at least one partner in range.
+      for (const p of breadboard.points) {
+        for (const q of breadboard.points) {
+          if (p.id === q.id) continue
+          const d = Math.hypot(p.x - q.x, p.y - q.y)
+          if (d >= minPx && d <= maxPx) {
+            set.add(p.id)
+            break
+          }
+        }
+      }
+    }
+    return set
+  }, [placement, libraryPartIndex, breadboard.points, pixelsPerMm])
+  /**
+   * Of all candidate pins, the single one closest to the current cursor
+   * (within ~3 mm) gets an extra-bright highlight so the user knows which
+   * hole their click will land in.
+   */
+  const placementHoverPinId = useMemo<string | null>(() => {
+    if (!placement || !placementPointer) return null
+    const snapRadiusPx = pixelsPerMm * 3
+    let bestId: string | null = null
+    let bestDist = snapRadiusPx
+    for (const id of placementCandidatePinIds) {
+      const p = findPoint(breadboard.points, id)
+      if (!p) continue
+      const d = Math.hypot(p.x - placementPointer.x, p.y - placementPointer.y)
+      if (d < bestDist) {
+        bestDist = d
+        bestId = p.id
+      }
+    }
+    return bestId
+  }, [placement, placementPointer, placementCandidatePinIds, breadboard.points, pixelsPerMm])
   // Rails depict only the breadboard's intrinsic conductive strips; user
   // wires are rendered separately and would otherwise produce long diagonal
   // polylines spanning two unrelated regions of the board.
@@ -859,6 +1282,31 @@ export function WireEditor({
         <div className="pin-editor__title-block">
           <p className="image-workspace__eyebrow">Project mode - wire two points</p>
           <p className="image-workspace__status">{status}</p>
+          {placement ? (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                marginTop: 6,
+                padding: '6px 10px',
+                background: '#fff7d6',
+                border: '1px solid #d8b94a',
+                borderRadius: 6,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span style={{ flex: 1, fontSize: 13 }}>{placement.message}</span>
+              <button
+                type="button"
+                className="action-button action-button--ghost"
+                onClick={cancelPlacement}
+              >
+                Cancel placement
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="pin-editor__controls">
           <label className="control-group" htmlFor="wire-editor-project-name">
@@ -926,6 +1374,10 @@ export function WireEditor({
             viewBox={`0 0 ${safeWidth} ${safeHeight}`}
             role="img"
             aria-label={`Breadboard wiring canvas with ${project.wires.length} wires`}
+            onPointerMove={handleSvgPointerMove}
+            onPointerUp={handleSvgPointerUp}
+            onPointerLeave={handleSvgPointerLeave}
+            style={placement ? { cursor: 'crosshair' } : undefined}
           >
             <image
               href={breadboard.imagePath}
@@ -1088,7 +1540,7 @@ export function WireEditor({
                 )
               })}
             </g>
-            {modules.map((instance) => {
+            {effectiveModules.map((instance) => {
               const part = libraryPartIndex.get(instance.libraryPartId)
 
               if (!part) {
@@ -1099,7 +1551,15 @@ export function WireEditor({
                 part.imageViews.find((entry) => entry.id === instance.viewId) ??
                 part.imageViews[0]
               const effectivePpm = pixelsPerMm * (instance.scaleFactor ?? 1)
-              const widthPx = part.dimensions.widthMm * effectivePpm
+              const isPassive = part.kind === 'generated-passive' && part.passive
+              // For generated passive parts, prefer the actual span recorded
+              // when the user placed it between two pins so the rendered leads
+              // terminate exactly at those holes.
+              const passiveWidthMm =
+                isPassive && typeof instance.passiveSpanMm === 'number' && instance.passiveSpanMm > 0
+                  ? instance.passiveSpanMm
+                  : part.dimensions.widthMm
+              const widthPx = (isPassive ? passiveWidthMm : part.dimensions.widthMm) * effectivePpm
               const heightPx = part.dimensions.heightMm * effectivePpm
 
               if (widthPx <= 0 || heightPx <= 0) {
@@ -1107,13 +1567,12 @@ export function WireEditor({
               }
 
               const isDragging = moduleDragState?.moduleId === instance.id
-              const rawCenter = isDragging && moduleDragState ? moduleDragState.position : { x: instance.centerX, y: instance.centerY }
-              // During drag, show the snapped position if a snap is in range
-              const center = isDragging && moduleDragState?.snappedPosition
-                ? moduleDragState.snappedPosition
-                : rawCenter
+              const isEndpointDragging = passiveEndpointDrag?.moduleId === instance.id
+              const center = { x: instance.centerX, y: instance.centerY }
               const isSelected = selectedModuleId === instance.id
-              const isSnapping = isDragging && moduleDragState?.snapPinId !== null
+              const isSnapping =
+                (isDragging && moduleDragState?.snapPinId !== null) ||
+                (isEndpointDragging && passiveEndpointDrag?.snapPinId !== null)
 
               return (
                 <g
@@ -1129,7 +1588,17 @@ export function WireEditor({
                   aria-label={`Module ${part.name} (${part.category})`}
                   style={{ cursor: 'move' }}
                 >
-                  {view ? (
+                  {part.kind === 'generated-passive' && part.passive ? (
+                    <g
+                      transform={`translate(${center.x - widthPx / 2} ${center.y - heightPx / 2})`}
+                    >
+                      <GeneratedPassiveGraphic
+                        spec={part.passive}
+                        pixelsPerMm={effectivePpm}
+                        spanMm={passiveWidthMm}
+                      />
+                    </g>
+                  ) : view ? (
                     <image
                       href={view.imagePath}
                       x={center.x - widthPx / 2}
@@ -1139,18 +1608,82 @@ export function WireEditor({
                       preserveAspectRatio="none"
                     />
                   ) : null}
-                  <rect
-                    x={center.x - widthPx / 2}
-                    y={center.y - heightPx / 2}
-                    width={widthPx}
-                    height={heightPx}
-                    fill="transparent"
-                    stroke={isSnapping ? '#1f8e4d' : isSelected ? '#1f5fcc' : '#444'}
-                    strokeWidth={isSnapping ? 3.5 : isSelected ? 3 : 1.5}
-                    strokeDasharray={isSelected || isSnapping ? undefined : '4 3'}
-                  />
+                  {/*
+                    For generated passives the SVG body and silver leads are
+                    visually self-contained, so the bounding rectangle is only
+                    drawn on hover/selection (very subtle) to avoid implying
+                    that the whole rectangle area is electrically connected.
+                  */}
+                  {isPassive && !isSelected && !isSnapping ? (
+                    <rect
+                      x={center.x - widthPx / 2}
+                      y={center.y - heightPx / 2}
+                      width={widthPx}
+                      height={heightPx}
+                      fill="transparent"
+                      stroke="transparent"
+                    />
+                  ) : (
+                    <rect
+                      x={center.x - widthPx / 2}
+                      y={center.y - heightPx / 2}
+                      width={widthPx}
+                      height={heightPx}
+                      fill="transparent"
+                      stroke={isSnapping ? '#1f8e4d' : isSelected ? '#1f5fcc' : '#444'}
+                      strokeWidth={isSnapping ? 3.5 : isSelected ? 3 : 1.5}
+                      strokeDasharray={isSelected || isSnapping ? undefined : '4 3'}
+                    />
+                  )}
                 </g>
               )
+            })}
+            {/*
+              Endpoint drag handles for the currently-selected generated
+              passive. Drag either silver contact to re-position that lead;
+              the opposite contact stays anchored, the body remains its
+              physical size, and the leads on both sides recompute so the
+              body stays centred between the two pins.
+            */}
+            {effectiveModules.flatMap((instance) => {
+              if (selectedModuleId !== instance.id) return []
+              const part = libraryPartIndex.get(instance.libraryPartId)
+              if (!part || part.kind !== 'generated-passive' || !part.passive) return []
+              const endpoints = getPassiveEndpoints(instance)
+              if (!endpoints) return []
+              const handleR = Math.max(6, pixelsPerMm * 1.4)
+              const isEndpointDragging = passiveEndpointDrag?.moduleId === instance.id
+              return (['a', 'b'] as const).map((end) => {
+                const pos = end === 'a' ? endpoints.a : endpoints.b
+                let stroke = '#1f5fcc'
+                let fill = 'rgba(31, 95, 204, 0.15)'
+                if (isEndpointDragging && passiveEndpointDrag) {
+                  if (passiveEndpointDrag.snapPinId) {
+                    stroke = '#1f8e4d'
+                    fill = 'rgba(31, 142, 77, 0.30)'
+                  } else if (passiveEndpointDrag.valid) {
+                    stroke = '#d68f00'
+                    fill = 'rgba(255, 196, 0, 0.25)'
+                  } else {
+                    stroke = '#cc3333'
+                    fill = 'rgba(204, 51, 51, 0.25)'
+                  }
+                }
+                return (
+                  <circle
+                    key={`passive-handle-${instance.id}-${end}`}
+                    cx={pos.x}
+                    cy={pos.y}
+                    r={handleR}
+                    fill={fill}
+                    stroke={stroke}
+                    strokeWidth={2.5}
+                    style={{ cursor: 'grab' }}
+                    onPointerDown={(event) => handlePassiveEndpointPointerDown(event, instance, end)}
+                    aria-label={`Drag ${end === 'a' ? 'left' : 'right'} contact of ${part.name}`}
+                  />
+                )
+              })
             })}
             {effectiveModules.flatMap((instance) => {
               const part = libraryPartIndex.get(instance.libraryPartId)
@@ -1163,18 +1696,14 @@ export function WireEditor({
               if (widthPx <= 0 || heightPx <= 0) {
                 return []
               }
-              const angleRad = (instance.rotationDeg * Math.PI) / 180
-              const cosA = Math.cos(angleRad)
-              const sinA = Math.sin(angleRad)
               const activeViewId = instance.viewId ?? part.imageViews[0]?.id
-              return part.physicalPoints
-                .filter((p) => isSnapPoint(p) && (!activeViewId || getViewForPoint(part, p)?.id === activeViewId))
-                .map((physPt) => {
-                  const { dx, dy } = getPhysicalPointModuleOffsetPx(physPt, part, effectivePpm)
-                  const rotDx = dx * cosA - dy * sinA
-                  const rotDy = dx * sinA + dy * cosA
-                  const absX = instance.centerX + rotDx
-                  const absY = instance.centerY + rotDy
+              // Use the shared helper so the green dots sit at the actual
+              // contact endpoints — for stretched generated passives that
+              // means at the dragged lead tips, not the part's native lead
+              // spacing.
+              return getInstanceSnapPointsWorld(instance, part, pixelsPerMm)
+                .filter(({ point }) => !activeViewId || getViewForPoint(part, point)?.id === activeViewId)
+                .map(({ point: physPt, x: absX, y: absY }) => {
                   let aligned = false
                   for (const bp of breadboard.points) {
                     if ((bp.x - absX) ** 2 + (bp.y - absY) ** 2 <= modulePointAlignThresholdSq) {
@@ -1442,25 +1971,53 @@ export function WireEditor({
               const isAligned = alignedPinIds.has(point.id)
               const isConnected = connectedPinIds.has(point.id)
               const isCovered = coveredPinIds.has(point.id)
+              const isPlacementFirst = placement?.firstPinId === point.id
+              const isPlacementCandidate = placementCandidatePinIds.has(point.id)
+              const isPlacementHover = placementHoverPinId === point.id
+              const forcedVisible = isPendingFrom || isSnapTarget || isPlacementFirst || isPlacementCandidate || isPlacementHover
               // When a module pin is plugged into this hole, the module's own
               // green pin dot serves as the visual indicator. Rendering the
               // breadboard hole on top would just paint red over the green.
-              if (isAligned && !isPendingFrom && !isSnapTarget) {
+              if (isAligned && !forcedVisible) {
                 return null
               }
-              if (isCovered && !isPendingFrom && !isSnapTarget) {
+              if (isCovered && !forcedVisible) {
                 return null
               }
               // A real jumper wire physically blocks the view of any hole it
               // sits over. Hide pin-hole circles whose center lies under the
               // wire body so the rendered wire reads as solid plastic.
-              if (wireCoveredPinIds.has(point.id) && !isPendingFrom && !isSnapTarget) {
+              if (wireCoveredPinIds.has(point.id) && !forcedVisible) {
                 return null
               }
               const pinRadius = radius
 
               return (
                 <g key={point.id} className="pin-editor__pin-group">
+                  {isPlacementCandidate || isPlacementFirst ? (
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r={radius * 2.4}
+                      fill={isPlacementFirst ? 'rgba(31, 142, 77, 0.35)' : 'rgba(255, 196, 0, 0.28)'}
+                      stroke={isPlacementFirst ? '#1f8e4d' : '#d68f00'}
+                      strokeWidth={isPlacementFirst ? 2.5 : 1.5}
+                      pointerEvents="none"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  {isPlacementHover && !isPlacementFirst ? (
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r={radius * 3.0}
+                      fill="rgba(31, 142, 77, 0.35)"
+                      stroke="#1f8e4d"
+                      strokeWidth={3}
+                      pointerEvents="none"
+                      aria-hidden="true"
+                    />
+                  ) : null}
                   {isSnapTarget ? (
                     <circle
                       className="wire-editor__snap-target"
@@ -1500,6 +2057,63 @@ export function WireEditor({
                 </g>
               )
             })}
+            {(() => {
+              if (!placement || !placementPointer) return null
+              const part = libraryPartIndex.get(placement.libraryPartId)
+              if (!part || part.kind !== 'generated-passive' || !part.passive) return null
+              const heightPx = part.dimensions.heightMm * pixelsPerMm
+              if (heightPx <= 0) return null
+
+              // Snap the cursor end of the ghost to the nearest in-range
+              // candidate pin so the user can clearly see which hole the
+              // resistor will land in.
+              let snappedEnd: { x: number; y: number } = placementPointer
+              {
+                const snapRadiusPx = pixelsPerMm * 3 // 3 mm
+                let bestDist = snapRadiusPx
+                for (const id of placementCandidatePinIds) {
+                  const p = findPoint(breadboard.points, id)
+                  if (!p) continue
+                  const d = Math.hypot(p.x - placementPointer.x, p.y - placementPointer.y)
+                  if (d < bestDist) {
+                    bestDist = d
+                    snappedEnd = { x: p.x, y: p.y }
+                  }
+                }
+              }
+
+              let center = snappedEnd
+              let rotationDeg = 0
+              let widthPx = part.dimensions.widthMm * pixelsPerMm
+              if (placement.firstPinId) {
+                const a = findPoint(breadboard.points, placement.firstPinId)
+                if (a) {
+                  center = { x: (a.x + snappedEnd.x) / 2, y: (a.y + snappedEnd.y) / 2 }
+                  rotationDeg = (Math.atan2(snappedEnd.y - a.y, snappedEnd.x - a.x) * 180) / Math.PI
+                  // Stretch the ghost to the actual pin-to-pin distance so
+                  // the leads visually terminate at both endpoints.
+                  widthPx = Math.hypot(snappedEnd.x - a.x, snappedEnd.y - a.y)
+                }
+              }
+              if (widthPx <= 0) return null
+              const spanMm = widthPx / pixelsPerMm
+              return (
+                <g
+                  className="wire-editor__placement-ghost"
+                  transform={`rotate(${rotationDeg} ${center.x} ${center.y})`}
+                  pointerEvents="none"
+                  style={{ opacity: 0.85 }}
+                >
+                  <g transform={`translate(${center.x - widthPx / 2} ${center.y - heightPx / 2})`}>
+                    <GeneratedPassiveGraphic
+                      spec={part.passive}
+                      pixelsPerMm={pixelsPerMm}
+                      spanMm={spanMm}
+                    />
+                  </g>
+                </g>
+              )
+            })()}
           </svg>
         </div>
       </section>
@@ -1515,6 +2129,7 @@ export function WireEditor({
         onSetRotation={handleSetModuleRotation}
         onSetScale={handleSetModuleScale}
         onAlignToPin={handleAlignModuleToPin}
+        onCreatePassive={onCreatePassive}
       />
       <ComponentsPanel
         components={project.components ?? []}
@@ -1555,7 +2170,9 @@ function ComponentsPanel({ components, isBusy, onAdd, onRemove }: ComponentsPane
       <header className="components-panel__header">
         <h2 className="components-panel__title">Components</h2>
         <p className="components-panel__hint">
-          Track resistors, LEDs, and other parts you place on the breadboard.
+          Track resistors, LEDs, and other parts you place on the breadboard. The entries here are
+          notes only — to actually drop a resistor or capacitor on the board, use the
+          <strong> Modules</strong> panel above and click <strong>Generate a passive part</strong>.
         </p>
       </header>
       <form className="components-panel__form" onSubmit={handleSubmit}>
@@ -1647,6 +2264,7 @@ type ModulesPanelProps = {
   onSetRotation: (moduleId: string, rotationDeg: number) => void
   onSetScale: (moduleId: string, scaleFactor: number) => void
   onAlignToPin: (moduleId: string) => void
+  onCreatePassive?: () => void
 }
 
 function ModulesPanel({
@@ -1661,6 +2279,7 @@ function ModulesPanel({
   onSetRotation,
   onSetScale,
   onAlignToPin,
+  onCreatePassive,
 }: ModulesPanelProps) {
   const placeableParts = useMemo(
     () => libraryParts.filter((part) => part.dimensions.widthMm > 0 && part.dimensions.heightMm > 0),
@@ -1709,9 +2328,21 @@ function ModulesPanel({
         <h2 className="components-panel__title">Modules</h2>
         <p className="components-panel__hint">
           Place sensors, microcontrollers, and other library modules. Drag to position, rotate to
-          fit, and align to the nearest pin hole. All modules render at the breadboard&apos;s
-          physical scale.
+          fit, and align to the nearest pin hole. Generated resistors and capacitors switch into a
+          two-pin placement mode and only fit on pin pairs that match their lead spacing. All
+          modules render at the breadboard&apos;s physical scale.
         </p>
+        {onCreatePassive ? (
+          <button
+            type="button"
+            className="action-button"
+            onClick={onCreatePassive}
+            disabled={isBusy}
+            style={{ alignSelf: 'flex-start', marginTop: 6 }}
+          >
+            Generate a passive part
+          </button>
+        ) : null}
       </header>
       {placeableParts.length === 0 ? (
         <p className="components-panel__empty">
@@ -1760,7 +2391,9 @@ function ModulesPanel({
             onClick={handleAdd}
             disabled={isBusy || !effectivePartId}
           >
-            Add module
+            {partIndex.get(effectivePartId)?.kind === 'generated-passive'
+              ? 'Place between two pins'
+              : 'Add module'}
           </button>
         </div>
       )}

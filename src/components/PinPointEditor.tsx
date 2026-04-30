@@ -110,6 +110,8 @@ export function PinPointEditor({
   const [eraseMode, setEraseMode] = useState(false)
   const [eraseRect, setEraseRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const [eraseDragging, setEraseDragging] = useState(false)
+  const [linkRect, setLinkRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const [linkDragging, setLinkDragging] = useState(false)
   const [copyMode, setCopyMode] = useState(false)
   const [copyRect, setCopyRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const [copyDragging, setCopyDragging] = useState(false)
@@ -125,10 +127,12 @@ export function PinPointEditor({
     tx: number
     ty: number
     rotDeg: number
-    scale: number
+    scaleX: number
+    scaleY: number
   } | null>(null)
   const [undoStack, setUndoStack] = useState<BreadboardDefinition[]>([])
   const [redoStack, setRedoStack] = useState<BreadboardDefinition[]>([])
+  const [showCommands, setShowCommands] = useState(false)
   const undoHandlerRef = useRef<() => void>(() => {})
   const redoHandlerRef = useRef<() => void>(() => {})
   const transformKeyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {})
@@ -222,13 +226,21 @@ export function PinPointEditor({
     const target = event.target as SVGElement | null
 
     if (target?.dataset?.pinPointId && !eraseMode && !(copyMode && copyPins !== null) && !transformMode) {
-      // Pin click handled separately.
+      // Pin click handled separately (including link mode individual-pin toggle).
       return
     }
 
     const coordinates = getStageCoordinates(event)
 
     if (!coordinates) {
+      return
+    }
+
+    // Link mode: drag a rectangle to batch-add pins to the link selection.
+    if (linkMode) {
+      event.currentTarget.setPointerCapture(event.pointerId)
+      setLinkDragging(true)
+      setLinkRect({ x1: coordinates.x, y1: coordinates.y, x2: coordinates.x, y2: coordinates.y })
       return
     }
 
@@ -530,6 +542,8 @@ export function PinPointEditor({
   function cancelLinkMode() {
     setLinkMode(false)
     setLinkSelection(new Set())
+    setLinkRect(null)
+    setLinkDragging(false)
   }
 
   function startEraseMode() {
@@ -599,12 +613,12 @@ export function PinPointEditor({
 
   function getTransformedPoint(
     p: { x: number; y: number },
-    ts: { cx: number; cy: number; tx: number; ty: number; rotDeg: number; scale: number },
+    ts: { cx: number; cy: number; tx: number; ty: number; rotDeg: number; scaleX: number; scaleY: number },
   ) {
     const cosA = Math.cos((ts.rotDeg * Math.PI) / 180)
     const sinA = Math.sin((ts.rotDeg * Math.PI) / 180)
-    const dx = (p.x - ts.cx) * ts.scale
-    const dy = (p.y - ts.cy) * ts.scale
+    const dx = (p.x - ts.cx) * ts.scaleX
+    const dy = (p.y - ts.cy) * ts.scaleY
     return {
       x: ts.cx + ts.tx + dx * cosA - dy * sinA,
       y: ts.cy + ts.ty + dx * sinA + dy * cosA,
@@ -679,10 +693,22 @@ export function PinPointEditor({
       setTransformState((s) => (s ? { ...s, rotDeg: s.rotDeg + rotStep } : s))
     } else if (event.key === '=' || event.key === '+') {
       event.preventDefault()
-      setTransformState((s) => (s ? { ...s, scale: Math.min(5, s.scale + scaleStep) } : s))
+      setTransformState((s) => s ? { ...s, scaleX: Math.min(5, s.scaleX + scaleStep), scaleY: Math.min(5, s.scaleY + scaleStep) } : s)
     } else if (event.key === '-' && !event.ctrlKey && !event.metaKey) {
       event.preventDefault()
-      setTransformState((s) => (s ? { ...s, scale: Math.max(0.1, s.scale - scaleStep) } : s))
+      setTransformState((s) => s ? { ...s, scaleX: Math.max(0.1, s.scaleX - scaleStep), scaleY: Math.max(0.1, s.scaleY - scaleStep) } : s)
+    } else if (event.key === '.') {
+      event.preventDefault()
+      setTransformState((s) => s ? { ...s, scaleX: Math.min(5, s.scaleX + scaleStep) } : s)
+    } else if (event.key === ',') {
+      event.preventDefault()
+      setTransformState((s) => s ? { ...s, scaleX: Math.max(0.1, s.scaleX - scaleStep) } : s)
+    } else if (event.key === '>') {
+      event.preventDefault()
+      setTransformState((s) => s ? { ...s, scaleY: Math.min(5, s.scaleY + scaleStep) } : s)
+    } else if (event.key === '<') {
+      event.preventDefault()
+      setTransformState((s) => s ? { ...s, scaleY: Math.max(0.1, s.scaleY - scaleStep) } : s)
     } else if (event.key === 'Enter') {
       event.preventDefault()
       handleApplyTransform()
@@ -690,9 +716,13 @@ export function PinPointEditor({
   }
 
   function handleErasePointerMove(event: React.PointerEvent<SVGSVGElement>) {
-    if (!eraseDragging && !copyDragging && !transformDragging && !(copyMode && copyPins !== null)) return
+    if (!eraseDragging && !copyDragging && !transformDragging && !linkDragging && !(copyMode && copyPins !== null)) return
     const coordinates = getStageCoordinates(event)
     if (!coordinates) return
+    if (linkDragging) {
+      setLinkRect((prev) => (prev ? { ...prev, x2: coordinates.x, y2: coordinates.y } : null))
+      return
+    }
     if (eraseDragging) {
       setEraseRect((prev) => (prev ? { ...prev, x2: coordinates.x, y2: coordinates.y } : null))
       return
@@ -709,6 +739,25 @@ export function PinPointEditor({
   }
 
   function handleErasePointerUp() {
+    if (linkDragging && linkRect) {
+      setLinkDragging(false)
+      setLinkRect(null)
+      const minX = Math.min(linkRect.x1, linkRect.x2)
+      const maxX = Math.max(linkRect.x1, linkRect.x2)
+      const minY = Math.min(linkRect.y1, linkRect.y2)
+      const maxY = Math.max(linkRect.y1, linkRect.y2)
+      const enclosed = definition.points.filter(
+        (p) => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY,
+      )
+      if (enclosed.length > 0) {
+        setLinkSelection((prev) => {
+          const next = new Set(prev)
+          enclosed.forEach((p) => next.add(p.id))
+          return next
+        })
+      }
+      return
+    }
     if (transformDragging && transformRect) {
       setTransformDragging(false)
       setTransformRect(null)
@@ -729,7 +778,8 @@ export function PinPointEditor({
           tx: 0,
           ty: 0,
           rotDeg: 0,
-          scale: 1,
+          scaleX: 1,
+          scaleY: 1,
         })
       }
       return
@@ -880,6 +930,35 @@ export function PinPointEditor({
     setLinkSelection(new Set())
   }
 
+  function handleLinkTransformSelected() {
+    if (!transformState || transformState.selectedIds.size < 2) return
+    const selectedIds = transformState.selectedIds
+    const regionId = createRegionId()
+    const rowId = createAxisGroupId()
+    const orderedSelected = definition.points
+      .filter((p) => selectedIds.has(p.id))
+      .map((p) => p.id)
+    const newRegion: DefinitionRegion = {
+      id: regionId,
+      name: nextRegionName(definition),
+      kind: 'custom-grid',
+      pointIds: orderedSelected,
+      rows: [{ id: rowId, label: 'Net', pointIds: orderedSelected }],
+      columns: [],
+    }
+    const prunedRegions = pruneSelectedFromExistingGroups(definition.regions, selectedIds)
+    const nextPoints = definition.points.map((point) => {
+      if (!selectedIds.has(point.id)) return point
+      return { ...point, regionId, rowId, columnId: undefined }
+    })
+    pushChange({
+      ...definition,
+      points: nextPoints,
+      regions: [...(prunedRegions ?? []), newRegion],
+    })
+    // Keep transformState active so the user can still apply positional changes.
+  }
+
   return (
     <section className="pin-editor" aria-label="Add pin holes">
       <header className="pin-editor__header">
@@ -1004,6 +1083,16 @@ export function PinPointEditor({
             </button>
             <button
               type="button"
+              className="action-button action-button--ghost"
+              onClick={() => setShowCommands(true)}
+              disabled={isBusy}
+              aria-label="Show all commands"
+              title="Show all commands"
+            >
+              ⌘ Commands
+            </button>
+            <button
+              type="button"
               className="action-button"
               onClick={onSaveAndFinish}
               disabled={isBusy}
@@ -1045,7 +1134,7 @@ export function PinPointEditor({
           : transformMode && transformState === null
           ? 'Move area: drag a rectangle to select the pin holes to transform.'
           : transformMode && transformState !== null
-          ? `Move area: ${transformState.selectedIds.size} pin${transformState.selectedIds.size === 1 ? '' : 's'} selected — Arrow keys to nudge (Shift = 5×), [ / ] to rotate ±0.1° (Shift = ±1°), + / − to scale ±0.1% (Shift = ±1%). Enter to apply, Esc to cancel.`
+          ? `Move area: ${transformState.selectedIds.size} pin${transformState.selectedIds.size === 1 ? '' : 's'} selected — Arrow keys to nudge (Shift = 5×), [ / ] to rotate ±0.1° (Shift = ±1°), + / − to scale both ±0.1% (Shift = ±1%), , / . for X-only, < / > for Y-only. Enter to apply, Esc to cancel.`
           : 'Click the image to drop a pin hole. Click an existing pin once to select it, then click again to remove it. These points will be selectable later when wiring the breadboard.'}
       </p>
       {linkMode ? (
@@ -1212,7 +1301,11 @@ export function PinPointEditor({
               ? ` · offset (${transformState.tx.toFixed(1)}, ${transformState.ty.toFixed(1)}) px`
               : ''}
             {transformState.rotDeg !== 0 ? ` · rotation ${transformState.rotDeg.toFixed(2)}°` : ''}
-            {transformState.scale !== 1 ? ` · scale ${(transformState.scale * 100).toFixed(0)}%` : ''}
+            {transformState.scaleX !== 1 || transformState.scaleY !== 1
+              ? transformState.scaleX === transformState.scaleY
+                ? ` · scale ${(transformState.scaleX * 100).toFixed(1)}%`
+                : ` · scaleX ${(transformState.scaleX * 100).toFixed(1)}% · scaleY ${(transformState.scaleY * 100).toFixed(1)}%`
+              : ''}
           </p>
           <button
             type="button"
@@ -1221,6 +1314,15 @@ export function PinPointEditor({
             disabled={isBusy}
           >
             Apply (Enter)
+          </button>
+          <button
+            type="button"
+            className="action-button action-button--ghost"
+            onClick={handleLinkTransformSelected}
+            disabled={isBusy || !transformState || transformState.selectedIds.size < 2}
+            title="Link the selected pins as an electrical rail"
+          >
+            Link as rail
           </button>
           <button
             type="button"
@@ -1396,6 +1498,20 @@ export function PinPointEditor({
                 ))}
               </g>
             ) : null}
+            {linkMode && linkRect ? (
+              <rect
+                x={Math.min(linkRect.x1, linkRect.x2)}
+                y={Math.min(linkRect.y1, linkRect.y2)}
+                width={Math.abs(linkRect.x2 - linkRect.x1)}
+                height={Math.abs(linkRect.y2 - linkRect.y1)}
+                fill="rgba(31, 95, 204, 0.1)"
+                stroke="#1f5fcc"
+                strokeWidth={2}
+                strokeDasharray="6 3"
+                pointerEvents="none"
+                aria-hidden="true"
+              />
+            ) : null}
             {eraseMode && eraseRect ? (
               <rect
                 x={Math.min(eraseRect.x1, eraseRect.x2)}
@@ -1513,6 +1629,146 @@ export function PinPointEditor({
           </svg>
         </div>
       </section>
+
+      {showCommands && (
+        <div
+          className="cmd-palette"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Commands"
+          onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setShowCommands(false) } }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowCommands(false) }}
+        >
+          <div className="cmd-palette__dialog">
+            <div className="cmd-palette__header">
+              <h2 className="cmd-palette__title">Commands</h2>
+              <button type="button" className="cmd-palette__close" onClick={() => setShowCommands(false)} aria-label="Close commands">✕</button>
+            </div>
+            <div className="cmd-palette__body">
+
+              <div className="cmd-palette__group">
+                <p className="cmd-palette__group-label">General</p>
+                <button type="button" className="cmd-palette__item" disabled={undoStack.length === 0} onClick={() => { setShowCommands(false); handleUndo() }}>
+                  <span className="cmd-palette__item-label">Undo</span>
+                  <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">Ctrl</kbd><kbd className="cmd-palette__key">Z</kbd></span>
+                </button>
+                <button type="button" className="cmd-palette__item" disabled={redoStack.length === 0} onClick={() => { setShowCommands(false); handleRedo() }}>
+                  <span className="cmd-palette__item-label">Redo</span>
+                  <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">Ctrl</kbd><kbd className="cmd-palette__key">Y</kbd></span>
+                </button>
+                <button type="button" className="cmd-palette__item" disabled={isBusy || definition.points.length === 0} onClick={() => { setShowCommands(false); handleClearAll() }}>
+                  <span className="cmd-palette__item-label">Clear all pins</span>
+                </button>
+                <button type="button" className="cmd-palette__item" disabled={isBusy} onClick={() => { setShowCommands(false); onSaveAndFinish() }}>
+                  <span className="cmd-palette__item-label">Save breadboard</span>
+                </button>
+                <button type="button" className="cmd-palette__item" disabled={isBusy} onClick={() => { setShowCommands(false); onBack() }}>
+                  <span className="cmd-palette__item-label">Back to alignment</span>
+                </button>
+              </div>
+
+              <div className="cmd-palette__group">
+                <p className="cmd-palette__group-label">Modes</p>
+                <button
+                  type="button"
+                  className={`cmd-palette__item${calibrationStep.kind !== 'idle' ? ' cmd-palette__item--active' : ''}`}
+                  onClick={() => { setShowCommands(false); calibrationStep.kind === 'idle' ? setCalibrationStep({ kind: 'awaiting-first' }) : setCalibrationStep({ kind: 'idle' }) }}
+                >
+                  <span className="cmd-palette__item-label">{calibrationStep.kind !== 'idle' ? '✓ Set scale — cancel' : 'Set scale'}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`cmd-palette__item${gridStep.kind !== 'idle' ? ' cmd-palette__item--active' : ''}`}
+                  onClick={() => { setShowCommands(false); gridStep.kind === 'idle' ? startGridFill() : cancelGridFill() }}
+                >
+                  <span className="cmd-palette__item-label">{gridStep.kind !== 'idle' ? '✓ Grid fill — cancel' : 'Grid fill'}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`cmd-palette__item${linkMode ? ' cmd-palette__item--active' : ''}`}
+                  onClick={() => { setShowCommands(false); linkMode ? cancelLinkMode() : startLinkMode() }}
+                >
+                  <span className="cmd-palette__item-label">{linkMode ? '✓ Link pins — cancel' : 'Link pins'}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`cmd-palette__item${eraseMode ? ' cmd-palette__item--active' : ''}`}
+                  onClick={() => { setShowCommands(false); eraseMode ? cancelEraseMode() : startEraseMode() }}
+                >
+                  <span className="cmd-palette__item-label">{eraseMode ? '✓ Erase area — cancel' : 'Erase area'}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`cmd-palette__item${copyMode ? ' cmd-palette__item--active' : ''}`}
+                  onClick={() => { setShowCommands(false); copyMode ? cancelCopyMode() : startCopyMode() }}
+                >
+                  <span className="cmd-palette__item-label">{copyMode ? '✓ Copy area — cancel' : 'Copy area'}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`cmd-palette__item${transformMode ? ' cmd-palette__item--active' : ''}`}
+                  onClick={() => { setShowCommands(false); transformMode ? cancelTransformMode() : startTransformMode() }}
+                >
+                  <span className="cmd-palette__item-label">{transformMode ? '✓ Move / transform area — cancel' : 'Move / transform area'}</span>
+                </button>
+              </div>
+
+              {transformMode && transformState !== null && (
+                <div className="cmd-palette__group">
+                  <p className="cmd-palette__group-label">Transform — {transformState.selectedIds.size} pin{transformState.selectedIds.size === 1 ? '' : 's'} selected</p>
+                  <button type="button" className="cmd-palette__item" disabled={isBusy || transformState.selectedIds.size < 2} onClick={() => { setShowCommands(false); handleLinkTransformSelected() }}>
+                    <span className="cmd-palette__item-label">Link selected as rail</span>
+                  </button>
+                  <button type="button" className="cmd-palette__item" disabled={isBusy} onClick={() => { setShowCommands(false); handleApplyTransform() }}>
+                    <span className="cmd-palette__item-label">Apply transform</span>
+                    <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">Enter</kbd></span>
+                  </button>
+                  <button type="button" className="cmd-palette__item" onClick={() => { setShowCommands(false); cancelTransformMode() }}>
+                    <span className="cmd-palette__item-label">Cancel transform</span>
+                    <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">Esc</kbd></span>
+                  </button>
+                  <div className="cmd-palette__item cmd-palette__item--hint">
+                    <span className="cmd-palette__item-label">Nudge position</span>
+                    <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">↑↓←→</kbd><span className="cmd-palette__item-note">Shift ×5</span></span>
+                  </div>
+                  <div className="cmd-palette__item cmd-palette__item--hint">
+                    <span className="cmd-palette__item-label">Rotate ±0.1°</span>
+                    <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">[</kbd><kbd className="cmd-palette__key">]</kbd><span className="cmd-palette__item-note">Shift ±1°</span></span>
+                  </div>
+                  <div className="cmd-palette__item cmd-palette__item--hint">
+                    <span className="cmd-palette__item-label">Scale both axes ±0.1%</span>
+                    <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">+</kbd><kbd className="cmd-palette__key">−</kbd><span className="cmd-palette__item-note">Shift ±1%</span></span>
+                  </div>
+                  <div className="cmd-palette__item cmd-palette__item--hint">
+                    <span className="cmd-palette__item-label">Scale X only ±0.1%</span>
+                    <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">.</kbd><kbd className="cmd-palette__key">,</kbd></span>
+                  </div>
+                  <div className="cmd-palette__item cmd-palette__item--hint">
+                    <span className="cmd-palette__item-label">Scale Y only ±0.1%</span>
+                    <span className="cmd-palette__shortcuts"><kbd className="cmd-palette__key">&gt;</kbd><kbd className="cmd-palette__key">&lt;</kbd></span>
+                  </div>
+                </div>
+              )}
+
+              {linkMode && (
+                <div className="cmd-palette__group">
+                  <p className="cmd-palette__group-label">Link mode — {linkSelection.size} pin{linkSelection.size === 1 ? '' : 's'} selected</p>
+                  <button type="button" className="cmd-palette__item" disabled={linkSelection.size < 2} onClick={() => { setShowCommands(false); handleLinkSelectedAsRail() }}>
+                    <span className="cmd-palette__item-label">Link selected as rail</span>
+                  </button>
+                  <button type="button" className="cmd-palette__item" disabled={linkSelection.size === 0} onClick={() => { setShowCommands(false); handleUnlinkSelected() }}>
+                    <span className="cmd-palette__item-label">Unlink selected</span>
+                  </button>
+                  <button type="button" className="cmd-palette__item" disabled={linkSelection.size === 0} onClick={() => { setShowCommands(false); setLinkSelection(new Set()) }}>
+                    <span className="cmd-palette__item-label">Clear link selection</span>
+                  </button>
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

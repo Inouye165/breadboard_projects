@@ -179,4 +179,53 @@ describe('breadboardProjectStore', () => {
       /Invalid wire waypoint/,
     )
   })
+
+  it('round-trips passiveSpanMm on placed generated-passive modules', async () => {
+    // Regression: the server normaliser used to drop passiveSpanMm on save,
+    // which made dragged resistor leads "snap back" to native spacing as
+    // soon as the saved project was echoed back from the API.
+    const projectsDirectory = await createProjectsDirectory()
+    const project: BreadboardProject = {
+      ...createProject(),
+      modules: [
+        {
+          id: 'mod-1',
+          libraryPartId: 'lib-resistor-1',
+          centerX: 250,
+          centerY: 110,
+          rotationDeg: 17,
+          passiveSpanMm: 18.7,
+        },
+      ],
+    }
+
+    const saved = await saveBreadboardProject(projectsDirectory, project)
+    expect(saved.modules?.[0].passiveSpanMm).toBe(18.7)
+    expect(saved.modules?.[0].rotationDeg).toBe(17)
+
+    const reloaded = await readBreadboardProject(projectsDirectory, 'project-1')
+    expect(reloaded?.modules?.[0].passiveSpanMm).toBe(18.7)
+    expect(reloaded?.modules?.[0].centerX).toBe(250)
+  })
+
+  it('rejects modules whose passiveSpanMm is the wrong type', async () => {
+    const projectsDirectory = await createProjectsDirectory()
+    const project = {
+      ...createProject(),
+      modules: [
+        {
+          id: 'mod-1',
+          libraryPartId: 'lib-1',
+          centerX: 0,
+          centerY: 0,
+          rotationDeg: 0,
+          passiveSpanMm: 'twelve',
+        },
+      ],
+    }
+
+    await expect(saveBreadboardProject(projectsDirectory, project)).rejects.toThrow(
+      /passiveSpanMm/,
+    )
+  })
 })

@@ -127,6 +127,7 @@ function App() {
   const [libraryParts, setLibraryParts] = useState<LibraryPartDefinition[]>([])
   const [currentLibraryPart, setCurrentLibraryPart] = useState<LibraryPartDefinition | null>(null)
   const [isLibraryPartBusy, setIsLibraryPartBusy] = useState(false)
+  const [passiveReturnStep, setPassiveReturnStep] = useState<WizardStep | null>(null)
   const [draftAlignment, setDraftAlignment] = useState(createDefaultAlignment())
   const [workspaceImageDimensions, setWorkspaceImageDimensions] = useState<ImageDimensions | null>(null)
   const [guideLinePercent, setGuideLinePercent] = useState(25)
@@ -305,6 +306,11 @@ function App() {
     setStatus('Pick a part type, set its options, and save.')
   }
 
+  function handleNewGeneratedPassiveFromWire() {
+    setPassiveReturnStep('wire')
+    handleNewGeneratedPassive()
+  }
+
   function handleOpenGeneratedPassive(part: LibraryPartDefinition) {
     setCurrentLibraryPart(part)
     setStep('edit-generated-passive')
@@ -321,12 +327,20 @@ function App() {
       setLibraryParts((existing) => mergeLibraryPartLibrary(existing, saved))
       setCurrentLibraryPart(saved)
       setStatus(`Saved generated part: ${saved.name}.`)
-      setStep('home')
+      const nextStep = passiveReturnStep ?? 'home'
+      setPassiveReturnStep(null)
+      setStep(nextStep)
     } catch {
       setStatus('Could not save the generated part.')
     } finally {
       setIsLibraryPartBusy(false)
     }
+  }
+
+  function handleCancelGeneratedPassive() {
+    const nextStep = passiveReturnStep ?? 'home'
+    setPassiveReturnStep(null)
+    setStep(nextStep)
   }
 
   async function handleOpenLibraryPart(partId: string) {
@@ -984,6 +998,7 @@ function App() {
           status={status}
           onBack={handleBackToHome}
           onChange={(nextProject) => void handleProjectChange(nextProject)}
+          onCreatePassive={handleNewGeneratedPassiveFromWire}
         />
       ) : null}
       {step === 'wire' && (!currentProject || !currentProjectBreadboard) ? (
@@ -1035,7 +1050,7 @@ function App() {
           initialPart={currentLibraryPart}
           isBusy={isLibraryPartBusy}
           status={status}
-          onCancel={handleBackToHome}
+          onCancel={handleCancelGeneratedPassive}
           onSave={(part) => void handleSaveGeneratedPassive(part)}
         />
       ) : null}

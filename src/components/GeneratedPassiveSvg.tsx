@@ -10,7 +10,7 @@
  *    sized to fit `maxWidthPx` × `maxHeightPx` for the editor preview pane.
  */
 
-import type { JSX } from 'react'
+import { useId, type JSX } from 'react'
 
 import {
   computePassiveGeometry,
@@ -24,11 +24,18 @@ import { capacitorEiaCode } from '../lib/capacitorLabel'
 type GraphicProps = {
   spec: GeneratedPassiveSpec
   pixelsPerMm: number
+  /**
+   * Actual lead-to-lead distance in mm. When provided (and the part has
+   * stretchable leads), the body remains its native length and the leads
+   * are extended/cut so their endpoints land exactly at ±spanMm/2 from
+   * the centre, matching the chosen breadboard pin holes.
+   */
+  spanMm?: number
 }
 
-export function GeneratedPassiveGraphic({ spec, pixelsPerMm }: GraphicProps): JSX.Element {
+export function GeneratedPassiveGraphic({ spec, pixelsPerMm, spanMm }: GraphicProps): JSX.Element {
   return spec.passiveType === 'resistor'
-    ? renderResistor(spec, pixelsPerMm)
+    ? <ResistorGraphic spec={spec} pxPerMm={pixelsPerMm} spanMm={spanMm} />
     : renderCapacitor(spec, pixelsPerMm)
 }
 
@@ -75,27 +82,49 @@ export function GeneratedPassivePreview({
 // Resistor rendering
 // ---------------------------------------------------------------------------
 
-function renderResistor(spec: ResistorSpec, pxPerMm: number): JSX.Element {
+/**
+ * Realistic axial through-hole resistor rendered as layered SVG.
+ *
+ * Layer order (back-to-front):
+ *   1. Metallic leads (gradient rect, overlapping body slightly)
+ *   2. Body base (gradient fill, rounded pill)
+ *   3. Color bands (clipped to body)
+ *   4. Curved-surface shading strips (clipped, make bands look painted on cylinder)
+ *   5. Specular highlight ellipse (clipped)
+ */
+function ResistorGraphic({ spec, pxPerMm, spanMm }: { spec: ResistorSpec; pxPerMm: number; spanMm?: number }): JSX.Element {
+  // useId gives a unique prefix per component instance so gradient IDs
+  // won't collide when multiple resistors appear on the same SVG canvas.
+  const uid = useId().replace(/[^a-z0-9]/gi, 'x')
+
   const geom = computePassiveGeometry(spec)
-  const width = geom.widthMm * pxPerMm
+  // For axial / ceramic-power packages, allow the caller to specify the
+  // actual lead span so the leads visually terminate at the chosen breadboard
+  // holes rather than at the part's native lead spacing.
+  const isStretchable =
+    spec.physical.mounting === 'through-hole-axial' ||
+    spec.physical.mounting === 'ceramic-power'
+  const effectiveWidthMm =
+    isStretchable && typeof spanMm === 'number' && spanMm > 0
+      ? Math.max(spanMm, spec.physical.bodyLengthMm + 0.1)
+      : geom.widthMm
+  const width = effectiveWidthMm * pxPerMm
   const height = geom.heightMm * pxPerMm
 
   if (spec.physical.mounting === 'smd-chip') {
-    const bodyW = width
-    const bodyH = height
-    const padW = bodyW * 0.18
+    const padW = width * 0.18
     return (
       <g aria-label={`SMD resistor ${spec.displayName}`}>
-        <rect x={0} y={0} width={padW} height={bodyH} fill="#bcbcbc" />
-        <rect x={bodyW - padW} y={0} width={padW} height={bodyH} fill="#bcbcbc" />
-        <rect x={padW} y={0} width={bodyW - 2 * padW} height={bodyH} fill="#1f1f1f" />
+        <rect x={0} y={0} width={padW} height={height} fill="#bcbcbc" />
+        <rect x={width - padW} y={0} width={padW} height={height} fill="#bcbcbc" />
+        <rect x={padW} y={0} width={width - 2 * padW} height={height} fill="#1f1f1f" />
         <text
-          x={bodyW / 2}
-          y={bodyH / 2}
+          x={width / 2}
+          y={height / 2}
           textAnchor="middle"
           dominantBaseline="middle"
           fill="#fff"
-          fontSize={Math.max(6, bodyH * 0.5)}
+          fontSize={Math.max(6, height * 0.5)}
           fontFamily="monospace"
         >
           {smdResistorCode(spec)}
@@ -104,25 +133,27 @@ function renderResistor(spec: ResistorSpec, pxPerMm: number): JSX.Element {
     )
   }
 
-  // Through-hole axial / ceramic-power: body centered, leads to each end.
+  // Through-hole axial / ceramic-power
   const phys = spec.physical
   const bodyLengthPx = phys.bodyLengthMm * pxPerMm
   const bodyDiameterPx = phys.bodyDiameterMm * pxPerMm
   const bodyX = (width - bodyLengthPx) / 2
   const bodyY = (height - bodyDiameterPx) / 2
-  const leadStrokeWidth = Math.max(1, phys.leadDiameterMm * pxPerMm)
+  // Round corners nearly to a half-circle for a pill/cylinder look.
+  const bodyRx = bodyDiameterPx * 0.46
+  // Lead is a thin metallic rect; slightly wider than the wire diameter.
+  const leadW = Math.max(1.5, phys.leadDiameterMm * pxPerMm)
+  const leadCy = height / 2
   const ceramic = phys.mounting === 'ceramic-power'
-  const bodyFill = ceramic ? '#e6e1cf' : '#dcb98a'
-  const bodyStroke = ceramic ? '#7a6a3c' : '#7a4a1f'
 
-  const bands =
+  const bands: BandColor[] =
     spec.bands.override && spec.bands.override.length > 0
       ? (spec.bands.override as BandColor[])
       : computeResistorBands(spec.resistance, spec.unit, spec.tolerance, spec.bands.bandCount)
 
-  // Distribute color bands along the body (skipping a small inset on the
-  // ends). Tolerance band is rendered slightly further from the rest.
-  const bandWidthPx = Math.max(1, bodyLengthPx * 0.06)
+  // Band layout: value bands clustered left-of-centre; tolerance band near
+  // the right end with a small gap to indicate orientation.
+  const bandWidthPx = Math.max(1.5, bodyLengthPx * 0.075)
   const insetPx = bodyLengthPx * 0.12
   const usableLengthPx = bodyLengthPx - insetPx * 2
   const valueBands = bands.length >= 4 ? bands.slice(0, bands.length - 1) : bands
@@ -133,60 +164,145 @@ function renderResistor(spec: ResistorSpec, pxPerMm: number): JSX.Element {
   })
   const tolerancePosition = bodyLengthPx - insetPx - bandWidthPx
 
+  // Unique IDs for inline <defs> references.
+  const leadGradId = `${uid}lg`
+  const bodyGradId = `${uid}bg`
+  const clipId = `${uid}cp`
+
   return (
     <g aria-label={`Resistor ${spec.displayName}`}>
-      {/* Leads */}
-      <line
-        x1={0}
-        y1={height / 2}
-        x2={bodyX}
-        y2={height / 2}
-        stroke="#9aa0a6"
-        strokeWidth={leadStrokeWidth}
-        strokeLinecap="round"
+      <defs>
+        {/* Metallic cylindrical wire: bright top, grey mid, dark bottom */}
+        <linearGradient id={leadGradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#e8e8e8" />
+          <stop offset="38%" stopColor="#b8b8b8" />
+          <stop offset="72%" stopColor="#909090" />
+          <stop offset="100%" stopColor="#686868" />
+        </linearGradient>
+
+        {/* Resistor body: warm tan with top highlight and bottom shadow */}
+        <linearGradient id={bodyGradId} x1="0" y1="0" x2="0" y2="1">
+          {ceramic ? (
+            <>
+              <stop offset="0%" stopColor="#f4ecd0" />
+              <stop offset="28%" stopColor="#ddd0a8" />
+              <stop offset="68%" stopColor="#b8a878" />
+              <stop offset="100%" stopColor="#8a7848" />
+            </>
+          ) : (
+            <>
+              <stop offset="0%" stopColor="#f5e4a8" />
+              <stop offset="28%" stopColor="#d8b464" />
+              <stop offset="68%" stopColor="#b07828" />
+              <stop offset="100%" stopColor="#7a4a0c" />
+            </>
+          )}
+        </linearGradient>
+
+        {/* Clip path matches the body pill exactly – bands stay inside */}
+        <clipPath id={clipId}>
+          <rect x={bodyX} y={bodyY} width={bodyLengthPx} height={bodyDiameterPx} rx={bodyRx} ry={bodyRx} />
+        </clipPath>
+      </defs>
+
+      {/* ── Left lead ── extends from pin hole (x=0) into the body */}
+      <rect
+        x={0}
+        y={leadCy - leadW / 2}
+        width={bodyX + leadW}
+        height={leadW}
+        fill={`url(#${leadGradId})`}
+        rx={leadW / 3}
       />
-      <line
-        x1={bodyX + bodyLengthPx}
-        y1={height / 2}
-        x2={width}
-        y2={height / 2}
-        stroke="#9aa0a6"
-        strokeWidth={leadStrokeWidth}
-        strokeLinecap="round"
+
+      {/* ── Right lead ── extends from body out to pin hole (x=width) */}
+      <rect
+        x={bodyX + bodyLengthPx - leadW}
+        y={leadCy - leadW / 2}
+        width={width - (bodyX + bodyLengthPx) + 2 * leadW}
+        height={leadW}
+        fill={`url(#${leadGradId})`}
+        rx={leadW / 3}
       />
-      {/* Body */}
+
+      {/* ── Body base with gradient ── */}
       <rect
         x={bodyX}
         y={bodyY}
         width={bodyLengthPx}
         height={bodyDiameterPx}
-        rx={bodyDiameterPx / 2}
-        ry={bodyDiameterPx / 2}
-        fill={bodyFill}
-        stroke={bodyStroke}
-        strokeWidth={1}
+        rx={bodyRx}
+        ry={bodyRx}
+        fill={`url(#${bodyGradId})`}
+        stroke={ceramic ? '#6a5820' : '#6a3a08'}
+        strokeWidth={0.75}
       />
-      {/* Value bands */}
-      {valueBands.map((color, index) => (
+
+      {/* ── Color bands + curved-surface shading, all clipped to body ── */}
+      <g clipPath={`url(#${clipId})`}>
+        {/* Value bands */}
+        {valueBands.map((color, index) => (
+          <rect
+            key={`vb${index}`}
+            x={bodyX + valueBandPositions[index]}
+            y={bodyY}
+            width={bandWidthPx}
+            height={bodyDiameterPx}
+            fill={BAND_HEX[color]}
+            opacity={0.94}
+          />
+        ))}
+
+        {/* Tolerance band (separated to the right for orientation cue) */}
+        {toleranceBand ? (
+          <rect
+            key="tb"
+            x={bodyX + tolerancePosition}
+            y={bodyY}
+            width={bandWidthPx}
+            height={bodyDiameterPx}
+            fill={BAND_HEX[toleranceBand]}
+            opacity={0.94}
+          />
+        ) : null}
+
+        {/* Top highlight strip – simulates light from above hitting a cylinder */}
         <rect
-          key={`band-${index}`}
-          x={bodyX + valueBandPositions[index]}
+          x={bodyX}
           y={bodyY}
-          width={bandWidthPx}
-          height={bodyDiameterPx}
-          fill={BAND_HEX[color]}
+          width={bodyLengthPx}
+          height={bodyDiameterPx * 0.32}
+          fill="rgba(255,255,255,0.16)"
         />
-      ))}
-      {/* Tolerance band */}
-      {toleranceBand ? (
+
+        {/* Bottom shadow strip – darkens the underside of the cylinder */}
         <rect
-          x={bodyX + tolerancePosition}
-          y={bodyY}
-          width={bandWidthPx}
-          height={bodyDiameterPx}
-          fill={BAND_HEX[toleranceBand]}
+          x={bodyX}
+          y={bodyY + bodyDiameterPx * 0.68}
+          width={bodyLengthPx}
+          height={bodyDiameterPx * 0.32}
+          fill="rgba(0,0,0,0.18)"
         />
-      ) : null}
+      </g>
+
+      {/* ── Specular highlight: small bright ellipse near top centre ── */}
+      <ellipse
+        clipPath={`url(#${clipId})`}
+        cx={bodyX + bodyLengthPx / 2}
+        cy={bodyY + bodyDiameterPx * 0.22}
+        rx={bodyLengthPx * 0.26}
+        ry={bodyDiameterPx * 0.14}
+        fill="rgba(255,255,255,0.38)"
+      />
+
+      {/*
+        ── Lead-tip contact dots ──
+        Render a small silver dot at each lead endpoint so it is visually
+        unambiguous that the resistor only connects at these two points,
+        not along the whole bounding-rectangle area.
+      */}
+      <circle cx={0} cy={leadCy} r={Math.max(1.6, leadW * 0.95)} fill="#d8d8d8" stroke="#5a5a5a" strokeWidth={0.5} />
+      <circle cx={width} cy={leadCy} r={Math.max(1.6, leadW * 0.95)} fill="#d8d8d8" stroke="#5a5a5a" strokeWidth={0.5} />
     </g>
   )
 }

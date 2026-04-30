@@ -54,6 +54,14 @@ export type ProjectModuleInstance = {
    * rendered size so module pins line up with the breadboard holes.
    */
   scaleFactor?: number
+  /**
+   * For generated passive parts placed between two breadboard pins, the
+   * actual centre-to-centre distance (mm) between those two pins. The
+   * renderer keeps the body at its native length and stretches/shrinks the
+   * leads to fill `passiveSpanMm`, mirroring how real flexible leads are
+   * cut to fit the chosen holes.
+   */
+  passiveSpanMm?: number
 }
 
 export type BreadboardProject = {
