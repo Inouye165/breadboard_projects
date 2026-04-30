@@ -200,6 +200,13 @@ type ModuleDragState = {
  */
 type PassiveEndpointDragState = {
   moduleId: string
+  /**
+   * Which endpoint of the part the user grabbed: 'a' is the part-local
+   * "minus" end (left when un-rotated), 'b' is the "plus" end. Used to
+   * orient the recomputed rotation so the grabbed handle stays at the
+   * cursor position rather than visually teleporting to the opposite side.
+   */
+  end: 'a' | 'b'
   /** Anchor endpoint (world SVG coords) — does not move during the drag. */
   anchor: WireVertex
   /** Current draggable endpoint position (world SVG coords). */
@@ -620,9 +627,52 @@ export function WireEditor({
   }
 
   function handleSvgPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (passiveEndpointDrag) {
+      const coords = getSvgCoordinates(event)
+      if (!coords) return
+      const instance = (project.modules ?? []).find((entry) => entry.id === passiveEndpointDrag.moduleId)
+      const part = instance ? libraryPartIndex.get(instance.libraryPartId) : undefined
+      if (!part) return
+      const { pos, snapPinId, valid } = snapPassiveEndpoint(part, passiveEndpointDrag.anchor, coords)
+      setPassiveEndpointDrag({
+        ...passiveEndpointDrag,
+        draggedPos: pos,
+        snapPinId,
+        valid,
+      })
+      return
+    }
     if (!placement) return
     const pos = getSvgCoordinates(event)
     if (pos) setPlacementPointer(pos)
+  }
+
+  function handleSvgPointerUp(event: React.PointerEvent<SVGSVGElement>) {
+    if (!passiveEndpointDrag) return
+    const drag = passiveEndpointDrag
+    setPassiveEndpointDrag(null)
+    if (!drag.snapPinId || !drag.valid) return
+    void event
+    updateModule(drag.moduleId, (instance) => {
+      const a = drag.anchor
+      const b = drag.draggedPos
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const distPx = Math.hypot(dx, dy)
+      if (distPx <= 0) return instance
+      const distMm = distPx / pixelsPerMm
+      const rotationDeg =
+        drag.end === 'a'
+          ? (Math.atan2(a.y - b.y, a.x - b.x) * 180) / Math.PI
+          : (Math.atan2(dy, dx) * 180) / Math.PI
+      return {
+        ...instance,
+        centerX: (a.x + b.x) / 2,
+        centerY: (a.y + b.y) / 2,
+        rotationDeg,
+        passiveSpanMm: distMm,
+      }
+    })
   }
 
   function handleSvgPointerLeave() {
@@ -879,63 +929,13 @@ export function WireEditor({
     const anchor = end === 'a' ? endpoints.b : endpoints.a
     const dragged = end === 'a' ? endpoints.a : endpoints.b
     setSelectedModuleId(instance.id)
-    if (typeof event.currentTarget.setPointerCapture === 'function') {
-      event.currentTarget.setPointerCapture(event.pointerId)
-    }
     setPassiveEndpointDrag({
       moduleId: instance.id,
+      end,
       anchor,
       draggedPos: dragged,
       snapPinId: null,
       valid: true,
-    })
-  }
-
-  function handlePassiveEndpointPointerMove(event: React.PointerEvent<SVGCircleElement>) {
-    if (!passiveEndpointDrag) return
-    const coords = getSvgCoordinates(event)
-    if (!coords) return
-    const instance = (project.modules ?? []).find((entry) => entry.id === passiveEndpointDrag.moduleId)
-    const part = instance ? libraryPartIndex.get(instance.libraryPartId) : undefined
-    if (!part) return
-    const { pos, snapPinId, valid } = snapPassiveEndpoint(part, passiveEndpointDrag.anchor, coords)
-    setPassiveEndpointDrag({
-      ...passiveEndpointDrag,
-      draggedPos: pos,
-      snapPinId,
-      valid,
-    })
-  }
-
-  function handlePassiveEndpointPointerUp(event: React.PointerEvent<SVGCircleElement>) {
-    if (!passiveEndpointDrag) return
-    if (
-      typeof event.currentTarget.hasPointerCapture === 'function' &&
-      event.currentTarget.hasPointerCapture(event.pointerId)
-    ) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    const drag = passiveEndpointDrag
-    setPassiveEndpointDrag(null)
-    // Only commit when the drop landed on a valid pin within the lead-reach
-    // range. Otherwise, snap back (no update) so the user doesn't end up with
-    // a passive whose contacts don't actually plug into holes.
-    if (!drag.snapPinId || !drag.valid) return
-    updateModule(drag.moduleId, (instance) => {
-      const a = drag.anchor
-      const b = drag.draggedPos
-      const dx = b.x - a.x
-      const dy = b.y - a.y
-      const distPx = Math.hypot(dx, dy)
-      if (distPx <= 0) return instance
-      const distMm = distPx / pixelsPerMm
-      return {
-        ...instance,
-        centerX: (a.x + b.x) / 2,
-        centerY: (a.y + b.y) / 2,
-        rotationDeg: (Math.atan2(dy, dx) * 180) / Math.PI,
-        passiveSpanMm: distMm,
-      }
     })
   }
 
@@ -1077,13 +1077,22 @@ export function WireEditor({
       const distPx = Math.hypot(dx, dy)
       if (distPx > 0) {
         const distMm = distPx / pixelsPerMm
+        // If the user grabbed end 'a' (the part-local "−" end), orient the
+        // body so that 'a' lands at draggedPos and the anchor lands at 'b'.
+        // If they grabbed 'b', vice versa. This keeps the grabbed handle
+        // visually attached to the cursor instead of jumping to the
+        // opposite side of the body.
+        const rotationDeg =
+          passiveEndpointDrag.end === 'a'
+            ? (Math.atan2(a.y - b.y, a.x - b.x) * 180) / Math.PI
+            : (Math.atan2(dy, dx) * 180) / Math.PI
         result = result.map((instance) =>
           instance.id === passiveEndpointDrag.moduleId
             ? {
                 ...instance,
                 centerX: (a.x + b.x) / 2,
                 centerY: (a.y + b.y) / 2,
-                rotationDeg: (Math.atan2(dy, dx) * 180) / Math.PI,
+                rotationDeg,
                 passiveSpanMm: distMm,
               }
             : instance,
@@ -1361,6 +1370,7 @@ export function WireEditor({
             role="img"
             aria-label={`Breadboard wiring canvas with ${project.wires.length} wires`}
             onPointerMove={handleSvgPointerMove}
+            onPointerUp={handleSvgPointerUp}
             onPointerLeave={handleSvgPointerLeave}
             style={placement ? { cursor: 'crosshair' } : undefined}
           >
@@ -1665,9 +1675,6 @@ export function WireEditor({
                     strokeWidth={2.5}
                     style={{ cursor: 'grab' }}
                     onPointerDown={(event) => handlePassiveEndpointPointerDown(event, instance, end)}
-                    onPointerMove={handlePassiveEndpointPointerMove}
-                    onPointerUp={handlePassiveEndpointPointerUp}
-                    onPointerCancel={handlePassiveEndpointPointerUp}
                     aria-label={`Drag ${end === 'a' ? 'left' : 'right'} contact of ${part.name}`}
                   />
                 )
