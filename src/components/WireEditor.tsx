@@ -898,7 +898,11 @@ export function WireEditor({
     let bestDist = snapRadiusPx
     let bestPin: WireVertex | null = null
     for (const pin of breadboard.points) {
-      if (!isSnapPoint(pin)) continue
+      // Breadboard points use BreadboardPoint kinds ('breadboard-hole'|'pin'|
+      // 'rail') – not the PhysicalPoint shape that isSnapPoint() above is
+      // typed for. Allow the two conductive kinds; rails are continuous
+      // strips and aren't valid lead landing spots.
+      if (pin.kind === 'rail') continue
       const d = Math.hypot(pin.x - pointer.x, pin.y - pointer.y)
       if (d >= bestDist) continue
       const distFromAnchorMm = Math.hypot(pin.x - anchor.x, pin.y - anchor.y) / pixelsPerMm
