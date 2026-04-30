@@ -94,6 +94,58 @@ function isSnappablePoint(point: PhysicalPoint) {
   return point.throughHole === true || point.kind === 'header-pin'
 }
 
+/**
+ * World-coordinate positions of every snap-eligible physical point for a
+ * placed module instance. For generated passives that recorded a custom
+ * `passiveSpanMm`, the two contact points are forced to ±spanMm/2 along the
+ * part's local x-axis so the snap markers sit at the actual lead tips —
+ * not at the part's native lead spacing.
+ */
+export function getInstanceSnapPointsWorld(
+  instance: ProjectModuleInstance,
+  part: LibraryPartDefinition,
+  pixelsPerMm: number,
+): Array<{ point: PhysicalPoint; x: number; y: number }> {
+  const angleRad = (instance.rotationDeg * Math.PI) / 180
+  const cosA = Math.cos(angleRad)
+  const sinA = Math.sin(angleRad)
+  const effectivePpm = pixelsPerMm * (instance.scaleFactor ?? 1)
+  const snapPoints = part.physicalPoints.filter(isSnappablePoint)
+
+  const isPassiveSpan =
+    part.kind === 'generated-passive' &&
+    part.passive &&
+    typeof instance.passiveSpanMm === 'number' &&
+    instance.passiveSpanMm > 0 &&
+    snapPoints.length === 2
+
+  if (isPassiveSpan) {
+    const halfPx = (instance.passiveSpanMm! * effectivePpm) / 2
+    // Order snap points by their native xMm so 'left' stays left, 'right' stays right.
+    const sorted = [...snapPoints].sort((a, b) => a.xMm - b.xMm)
+    return sorted.map((point, idx) => {
+      const dx = idx === 0 ? -halfPx : halfPx
+      const dy = 0
+      return {
+        point,
+        x: instance.centerX + dx * cosA - dy * sinA,
+        y: instance.centerY + dx * sinA + dy * cosA,
+      }
+    })
+  }
+
+  return snapPoints.map((point) => {
+    // Non-passive parts: preserve historical behavior (do not multiply by
+    // scaleFactor here — the existing alignment pipeline never did).
+    const { dx, dy } = getPhysicalPointModuleOffsetPx(point, part, pixelsPerMm)
+    return {
+      point,
+      x: instance.centerX + dx * cosA - dy * sinA,
+      y: instance.centerY + dx * sinA + dy * cosA,
+    }
+  })
+}
+
 export function computeAlignedBreadboardPinIds(
   modules: ProjectModuleInstance[],
   libraryPartIndex: Map<string, LibraryPartDefinition>,
@@ -117,21 +169,7 @@ export function computeAlignedBreadboardPinIds(
       continue
     }
 
-    const angleRad = (instance.rotationDeg * Math.PI) / 180
-    const cosA = Math.cos(angleRad)
-    const sinA = Math.sin(angleRad)
-
-    for (const physPt of part.physicalPoints) {
-      if (!isSnappablePoint(physPt)) {
-        continue
-      }
-
-      const { dx, dy } = getPhysicalPointModuleOffsetPx(physPt, part, pixelsPerMm)
-      const rotDx = dx * cosA - dy * sinA
-      const rotDy = dx * sinA + dy * cosA
-      const absX = instance.centerX + rotDx
-      const absY = instance.centerY + rotDy
-
+    for (const { x: absX, y: absY } of getInstanceSnapPointsWorld(instance, part, pixelsPerMm)) {
       for (const boardPt of breadboardPoints) {
         const distSq = (boardPt.x - absX) ** 2 + (boardPt.y - absY) ** 2
 

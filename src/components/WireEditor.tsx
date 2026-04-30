@@ -21,6 +21,7 @@ import {
   computeCoveredBreadboardPinIds,
   computeElectricalGroups,
   computeElectricallyConnectedPinIds,
+  getInstanceSnapPointsWorld,
   getPhysicalPointModuleOffsetPx,
   getViewForPoint,
 } from '../lib/modulePinAlignment'
@@ -1691,18 +1692,14 @@ export function WireEditor({
               if (widthPx <= 0 || heightPx <= 0) {
                 return []
               }
-              const angleRad = (instance.rotationDeg * Math.PI) / 180
-              const cosA = Math.cos(angleRad)
-              const sinA = Math.sin(angleRad)
               const activeViewId = instance.viewId ?? part.imageViews[0]?.id
-              return part.physicalPoints
-                .filter((p) => isSnapPoint(p) && (!activeViewId || getViewForPoint(part, p)?.id === activeViewId))
-                .map((physPt) => {
-                  const { dx, dy } = getPhysicalPointModuleOffsetPx(physPt, part, effectivePpm)
-                  const rotDx = dx * cosA - dy * sinA
-                  const rotDy = dx * sinA + dy * cosA
-                  const absX = instance.centerX + rotDx
-                  const absY = instance.centerY + rotDy
+              // Use the shared helper so the green dots sit at the actual
+              // contact endpoints — for stretched generated passives that
+              // means at the dragged lead tips, not the part's native lead
+              // spacing.
+              return getInstanceSnapPointsWorld(instance, part, pixelsPerMm)
+                .filter(({ point }) => !activeViewId || getViewForPoint(part, point)?.id === activeViewId)
+                .map(({ point: physPt, x: absX, y: absY }) => {
                   let aligned = false
                   for (const bp of breadboard.points) {
                     if ((bp.x - absX) ** 2 + (bp.y - absY) ** 2 <= modulePointAlignThresholdSq) {
