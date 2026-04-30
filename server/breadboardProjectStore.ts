@@ -110,6 +110,10 @@ function normalizeProjectModuleInstance(value: unknown): ProjectModuleInstance {
     throw new Error('Invalid module scaleFactor.')
   }
 
+  if (value.passiveSpanMm !== undefined && typeof value.passiveSpanMm !== 'number') {
+    throw new Error('Invalid module passiveSpanMm.')
+  }
+
   return {
     id: value.id,
     libraryPartId: value.libraryPartId,
@@ -118,6 +122,7 @@ function normalizeProjectModuleInstance(value: unknown): ProjectModuleInstance {
     centerY: value.centerY,
     rotationDeg: value.rotationDeg,
     scaleFactor: value.scaleFactor as number | undefined,
+    passiveSpanMm: value.passiveSpanMm as number | undefined,
   }
 }
 
