@@ -584,6 +584,7 @@ export function WireEditor({
       centerX,
       centerY,
       rotationDeg,
+      passiveSpanMm: distMm,
     }
     onChange({
       ...project,
@@ -968,6 +969,27 @@ export function WireEditor({
     }
     return set
   }, [placement, libraryPartIndex, breadboard.points, pixelsPerMm])
+  /**
+   * Of all candidate pins, the single one closest to the current cursor
+   * (within ~3 mm) gets an extra-bright highlight so the user knows which
+   * hole their click will land in.
+   */
+  const placementHoverPinId = useMemo<string | null>(() => {
+    if (!placement || !placementPointer) return null
+    const snapRadiusPx = pixelsPerMm * 3
+    let bestId: string | null = null
+    let bestDist = snapRadiusPx
+    for (const id of placementCandidatePinIds) {
+      const p = findPoint(breadboard.points, id)
+      if (!p) continue
+      const d = Math.hypot(p.x - placementPointer.x, p.y - placementPointer.y)
+      if (d < bestDist) {
+        bestDist = d
+        bestId = p.id
+      }
+    }
+    return bestId
+  }, [placement, placementPointer, placementCandidatePinIds, breadboard.points, pixelsPerMm])
   // Rails depict only the breadboard's intrinsic conductive strips; user
   // wires are rendered separately and would otherwise produce long diagonal
   // polylines spanning two unrelated regions of the board.
@@ -1340,7 +1362,15 @@ export function WireEditor({
                 part.imageViews.find((entry) => entry.id === instance.viewId) ??
                 part.imageViews[0]
               const effectivePpm = pixelsPerMm * (instance.scaleFactor ?? 1)
-              const widthPx = part.dimensions.widthMm * effectivePpm
+              const isPassive = part.kind === 'generated-passive' && part.passive
+              // For generated passive parts, prefer the actual span recorded
+              // when the user placed it between two pins so the rendered leads
+              // terminate exactly at those holes.
+              const passiveWidthMm =
+                isPassive && typeof instance.passiveSpanMm === 'number' && instance.passiveSpanMm > 0
+                  ? instance.passiveSpanMm
+                  : part.dimensions.widthMm
+              const widthPx = (isPassive ? passiveWidthMm : part.dimensions.widthMm) * effectivePpm
               const heightPx = part.dimensions.heightMm * effectivePpm
 
               if (widthPx <= 0 || heightPx <= 0) {
@@ -1374,7 +1404,11 @@ export function WireEditor({
                     <g
                       transform={`translate(${center.x - widthPx / 2} ${center.y - heightPx / 2})`}
                     >
-                      <GeneratedPassiveGraphic spec={part.passive} pixelsPerMm={effectivePpm} />
+                      <GeneratedPassiveGraphic
+                        spec={part.passive}
+                        pixelsPerMm={effectivePpm}
+                        spanMm={passiveWidthMm}
+                      />
                     </g>
                   ) : view ? (
                     <image
@@ -1386,16 +1420,33 @@ export function WireEditor({
                       preserveAspectRatio="none"
                     />
                   ) : null}
-                  <rect
-                    x={center.x - widthPx / 2}
-                    y={center.y - heightPx / 2}
-                    width={widthPx}
-                    height={heightPx}
-                    fill="transparent"
-                    stroke={isSnapping ? '#1f8e4d' : isSelected ? '#1f5fcc' : '#444'}
-                    strokeWidth={isSnapping ? 3.5 : isSelected ? 3 : 1.5}
-                    strokeDasharray={isSelected || isSnapping ? undefined : '4 3'}
-                  />
+                  {/*
+                    For generated passives the SVG body and silver leads are
+                    visually self-contained, so the bounding rectangle is only
+                    drawn on hover/selection (very subtle) to avoid implying
+                    that the whole rectangle area is electrically connected.
+                  */}
+                  {isPassive && !isSelected && !isSnapping ? (
+                    <rect
+                      x={center.x - widthPx / 2}
+                      y={center.y - heightPx / 2}
+                      width={widthPx}
+                      height={heightPx}
+                      fill="transparent"
+                      stroke="transparent"
+                    />
+                  ) : (
+                    <rect
+                      x={center.x - widthPx / 2}
+                      y={center.y - heightPx / 2}
+                      width={widthPx}
+                      height={heightPx}
+                      fill="transparent"
+                      stroke={isSnapping ? '#1f8e4d' : isSelected ? '#1f5fcc' : '#444'}
+                      strokeWidth={isSnapping ? 3.5 : isSelected ? 3 : 1.5}
+                      strokeDasharray={isSelected || isSnapping ? undefined : '4 3'}
+                    />
+                  )}
                 </g>
               )
             })}
@@ -1691,7 +1742,8 @@ export function WireEditor({
               const isCovered = coveredPinIds.has(point.id)
               const isPlacementFirst = placement?.firstPinId === point.id
               const isPlacementCandidate = placementCandidatePinIds.has(point.id)
-              const forcedVisible = isPendingFrom || isSnapTarget || isPlacementFirst || isPlacementCandidate
+              const isPlacementHover = placementHoverPinId === point.id
+              const forcedVisible = isPendingFrom || isSnapTarget || isPlacementFirst || isPlacementCandidate || isPlacementHover
               // When a module pin is plugged into this hole, the module's own
               // green pin dot serves as the visual indicator. Rendering the
               // breadboard hole on top would just paint red over the green.
@@ -1719,6 +1771,18 @@ export function WireEditor({
                       fill={isPlacementFirst ? 'rgba(31, 142, 77, 0.35)' : 'rgba(255, 196, 0, 0.28)'}
                       stroke={isPlacementFirst ? '#1f8e4d' : '#d68f00'}
                       strokeWidth={isPlacementFirst ? 2.5 : 1.5}
+                      pointerEvents="none"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  {isPlacementHover && !isPlacementFirst ? (
+                    <circle
+                      cx={point.x}
+                      cy={point.y}
+                      r={radius * 3.0}
+                      fill="rgba(31, 142, 77, 0.35)"
+                      stroke="#1f8e4d"
+                      strokeWidth={3}
                       pointerEvents="none"
                       aria-hidden="true"
                     />
@@ -1766,38 +1830,56 @@ export function WireEditor({
               if (!placement || !placementPointer) return null
               const part = libraryPartIndex.get(placement.libraryPartId)
               if (!part || part.kind !== 'generated-passive' || !part.passive) return null
-              const widthPx = part.dimensions.widthMm * pixelsPerMm
               const heightPx = part.dimensions.heightMm * pixelsPerMm
-              if (widthPx <= 0 || heightPx <= 0) return null
-              let center = placementPointer
+              if (heightPx <= 0) return null
+
+              // Snap the cursor end of the ghost to the nearest in-range
+              // candidate pin so the user can clearly see which hole the
+              // resistor will land in.
+              let snappedEnd: { x: number; y: number } = placementPointer
+              {
+                const snapRadiusPx = pixelsPerMm * 3 // 3 mm
+                let bestDist = snapRadiusPx
+                for (const id of placementCandidatePinIds) {
+                  const p = findPoint(breadboard.points, id)
+                  if (!p) continue
+                  const d = Math.hypot(p.x - placementPointer.x, p.y - placementPointer.y)
+                  if (d < bestDist) {
+                    bestDist = d
+                    snappedEnd = { x: p.x, y: p.y }
+                  }
+                }
+              }
+
+              let center = snappedEnd
               let rotationDeg = 0
+              let widthPx = part.dimensions.widthMm * pixelsPerMm
               if (placement.firstPinId) {
                 const a = findPoint(breadboard.points, placement.firstPinId)
                 if (a) {
-                  center = { x: (a.x + placementPointer.x) / 2, y: (a.y + placementPointer.y) / 2 }
-                  rotationDeg = (Math.atan2(placementPointer.y - a.y, placementPointer.x - a.x) * 180) / Math.PI
+                  center = { x: (a.x + snappedEnd.x) / 2, y: (a.y + snappedEnd.y) / 2 }
+                  rotationDeg = (Math.atan2(snappedEnd.y - a.y, snappedEnd.x - a.x) * 180) / Math.PI
+                  // Stretch the ghost to the actual pin-to-pin distance so
+                  // the leads visually terminate at both endpoints.
+                  widthPx = Math.hypot(snappedEnd.x - a.x, snappedEnd.y - a.y)
                 }
               }
+              if (widthPx <= 0) return null
+              const spanMm = widthPx / pixelsPerMm
               return (
                 <g
                   className="wire-editor__placement-ghost"
                   transform={`rotate(${rotationDeg} ${center.x} ${center.y})`}
                   pointerEvents="none"
-                  style={{ opacity: 0.75 }}
+                  style={{ opacity: 0.85 }}
                 >
                   <g transform={`translate(${center.x - widthPx / 2} ${center.y - heightPx / 2})`}>
-                    <GeneratedPassiveGraphic spec={part.passive} pixelsPerMm={pixelsPerMm} />
+                    <GeneratedPassiveGraphic
+                      spec={part.passive}
+                      pixelsPerMm={pixelsPerMm}
+                      spanMm={spanMm}
+                    />
                   </g>
-                  <rect
-                    x={center.x - widthPx / 2}
-                    y={center.y - heightPx / 2}
-                    width={widthPx}
-                    height={heightPx}
-                    fill="transparent"
-                    stroke="#1f8e4d"
-                    strokeWidth={2}
-                    strokeDasharray="6 3"
-                  />
                 </g>
               )
             })()}

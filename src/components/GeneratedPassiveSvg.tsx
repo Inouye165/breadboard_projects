@@ -24,11 +24,18 @@ import { capacitorEiaCode } from '../lib/capacitorLabel'
 type GraphicProps = {
   spec: GeneratedPassiveSpec
   pixelsPerMm: number
+  /**
+   * Actual lead-to-lead distance in mm. When provided (and the part has
+   * stretchable leads), the body remains its native length and the leads
+   * are extended/cut so their endpoints land exactly at ±spanMm/2 from
+   * the centre, matching the chosen breadboard pin holes.
+   */
+  spanMm?: number
 }
 
-export function GeneratedPassiveGraphic({ spec, pixelsPerMm }: GraphicProps): JSX.Element {
+export function GeneratedPassiveGraphic({ spec, pixelsPerMm, spanMm }: GraphicProps): JSX.Element {
   return spec.passiveType === 'resistor'
-    ? <ResistorGraphic spec={spec} pxPerMm={pixelsPerMm} />
+    ? <ResistorGraphic spec={spec} pxPerMm={pixelsPerMm} spanMm={spanMm} />
     : renderCapacitor(spec, pixelsPerMm)
 }
 
@@ -85,13 +92,23 @@ export function GeneratedPassivePreview({
  *   4. Curved-surface shading strips (clipped, make bands look painted on cylinder)
  *   5. Specular highlight ellipse (clipped)
  */
-function ResistorGraphic({ spec, pxPerMm }: { spec: ResistorSpec; pxPerMm: number }): JSX.Element {
+function ResistorGraphic({ spec, pxPerMm, spanMm }: { spec: ResistorSpec; pxPerMm: number; spanMm?: number }): JSX.Element {
   // useId gives a unique prefix per component instance so gradient IDs
   // won't collide when multiple resistors appear on the same SVG canvas.
   const uid = useId().replace(/[^a-z0-9]/gi, 'x')
 
   const geom = computePassiveGeometry(spec)
-  const width = geom.widthMm * pxPerMm
+  // For axial / ceramic-power packages, allow the caller to specify the
+  // actual lead span so the leads visually terminate at the chosen breadboard
+  // holes rather than at the part's native lead spacing.
+  const isStretchable =
+    spec.physical.mounting === 'through-hole-axial' ||
+    spec.physical.mounting === 'ceramic-power'
+  const effectiveWidthMm =
+    isStretchable && typeof spanMm === 'number' && spanMm > 0
+      ? Math.max(spanMm, spec.physical.bodyLengthMm + 0.1)
+      : geom.widthMm
+  const width = effectiveWidthMm * pxPerMm
   const height = geom.heightMm * pxPerMm
 
   if (spec.physical.mounting === 'smd-chip') {
@@ -277,6 +294,15 @@ function ResistorGraphic({ spec, pxPerMm }: { spec: ResistorSpec; pxPerMm: numbe
         ry={bodyDiameterPx * 0.14}
         fill="rgba(255,255,255,0.38)"
       />
+
+      {/*
+        ── Lead-tip contact dots ──
+        Render a small silver dot at each lead endpoint so it is visually
+        unambiguous that the resistor only connects at these two points,
+        not along the whole bounding-rectangle area.
+      */}
+      <circle cx={0} cy={leadCy} r={Math.max(1.6, leadW * 0.95)} fill="#d8d8d8" stroke="#5a5a5a" strokeWidth={0.5} />
+      <circle cx={width} cy={leadCy} r={Math.max(1.6, leadW * 0.95)} fill="#d8d8d8" stroke="#5a5a5a" strokeWidth={0.5} />
     </g>
   )
 }
