@@ -6,6 +6,16 @@
  * breadboard alignment - the image is just the visual skin.
  */
 
+import type { PinElectricalMetadata } from './pinElectrical'
+
+/**
+ * Schema version for `LibraryPartDefinition`. Bump when adding fields whose
+ * absence in older saved modules would break runtime assumptions. Optional
+ * fields can be added without bumping this — backward compatibility is
+ * handled in `server/partLibraryStore.ts` normalizers.
+ */
+export const LIBRARY_PART_DEFINITION_VERSION = 1
+
 export const PART_CATEGORIES = [
   'sensor',
   'module',
@@ -90,6 +100,12 @@ export type LogicalPin = {
   name: string
   description?: string
   function?: string
+  /**
+   * Optional generic electrical metadata. All fields are optional and the
+   * connection-validation engine treats missing values as 'unknown' rather
+   * than guessing. Adding new sub-fields here does not require a migration.
+   */
+  electrical?: PinElectricalMetadata
 }
 
 export type PhysicalPoint = {
@@ -159,6 +175,17 @@ export type LibraryPartDefinition = {
   resources: PartResource[]
   /** Populated when `kind === 'generated-passive'`. */
   passive?: GeneratedPassiveSpec
+  /**
+   * Schema version. Older saved parts may omit this; loaders default to 1
+   * for backwards compatibility.
+   */
+  definitionVersion?: number
+  /** Free-form tags / categories (e.g. ['esp32', 'wifi', 'low-power']). */
+  tags?: string[]
+  notes?: string
+  /** Convenience module-level link (also addable as `resources` entries). */
+  datasheetUrl?: string
+  schematicUrl?: string
   createdAt: string
   updatedAt: string
 }
@@ -216,7 +243,19 @@ export function createPartResourceId() {
 }
 
 export function cloneLogicalPin(pin: LogicalPin): LogicalPin {
-  return { ...pin }
+  const { electrical } = pin
+  return {
+    ...pin,
+    electrical: electrical
+      ? {
+          ...electrical,
+          voltageDomain: electrical.voltageDomain ? { ...electrical.voltageDomain } : undefined,
+          currentLimits: electrical.currentLimits ? { ...electrical.currentLimits } : undefined,
+          capabilities: electrical.capabilities ? [...electrical.capabilities] : undefined,
+          aliases: electrical.aliases ? [...electrical.aliases] : undefined,
+        }
+      : undefined,
+  }
 }
 
 export function cloneCalibration(calibration: PartImageCalibration): PartImageCalibration {
@@ -259,6 +298,7 @@ export function cloneLibraryPart(part: LibraryPartDefinition): LibraryPartDefini
     passive: part.passive
       ? (JSON.parse(JSON.stringify(part.passive)) as GeneratedPassiveSpec)
       : undefined,
+    tags: part.tags ? [...part.tags] : undefined,
   }
 }
 
@@ -286,6 +326,11 @@ export function createEmptyLibraryPart(draft: LibraryPartDraft = {}): LibraryPar
     passive: draft.passive
       ? (JSON.parse(JSON.stringify(draft.passive)) as GeneratedPassiveSpec)
       : undefined,
+    definitionVersion: draft.definitionVersion ?? LIBRARY_PART_DEFINITION_VERSION,
+    tags: draft.tags ? [...draft.tags] : undefined,
+    notes: draft.notes,
+    datasheetUrl: draft.datasheetUrl,
+    schematicUrl: draft.schematicUrl,
     createdAt: draft.createdAt ?? timestamp,
     updatedAt: draft.updatedAt ?? timestamp,
   }
