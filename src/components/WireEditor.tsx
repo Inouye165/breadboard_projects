@@ -32,6 +32,10 @@ import {
   type PhysicalPoint,
 } from '../lib/partLibraryModel'
 import { GeneratedPassiveGraphic } from './GeneratedPassiveSvg'
+import {
+  validateCandidateWire,
+  type ValidationFinding,
+} from '../lib/connectionValidation'
 
 /** Distance between the two leads of a generated passive part, in millimeters. */
 function getPassiveLeadSpacingMm(part: LibraryPartDefinition): number {
@@ -324,6 +328,10 @@ export function WireEditor({
   const [passiveEndpointDrag, setPassiveEndpointDrag] = useState<PassiveEndpointDragState | null>(null)
   const [showPinLabels, setShowPinLabels] = useState(false)
   const [showRails, setShowRails] = useState(false)
+  const [wireValidationMessage, setWireValidationMessage] = useState<{
+    severity: 'error' | 'warning'
+    text: string
+  } | null>(null)
   const [placement, setPlacement] = useState<{
     libraryPartId: string
     firstPinId: string | null
@@ -398,13 +406,35 @@ export function WireEditor({
 
     if (pendingFromPointId === null) {
       setPendingFromPointId(pointId)
+      setWireValidationMessage(null)
       return
     }
 
     if (pendingFromPointId === pointId) {
       setPendingFromPointId(null)
+      setWireValidationMessage(null)
       return
     }
+
+    // Run the generic data-driven validator before committing the wire.
+    const findings: ValidationFinding[] = validateCandidateWire(
+      {
+        project,
+        breadboard,
+        libraryPartIndex,
+        pixelsPerMm,
+      },
+      { fromPointId: pendingFromPointId, toPointId: pointId },
+    )
+    const error = findings.find((f) => f.severity === 'error')
+    if (error) {
+      setWireValidationMessage({ severity: 'error', text: error.message })
+      // Keep the user's pending start pin selected so they can pick a
+      // different destination.
+      return
+    }
+    const warning = findings.find((f) => f.severity === 'warning')
+    setWireValidationMessage(warning ? { severity: 'warning', text: warning.message } : null)
 
     const newWire: Wire = {
       id: createWireId(),
@@ -1282,6 +1312,29 @@ export function WireEditor({
         <div className="pin-editor__title-block">
           <p className="image-workspace__eyebrow">Project mode - wire two points</p>
           <p className="image-workspace__status">{status}</p>
+          {wireValidationMessage ? (
+            <div
+              role="alert"
+              aria-live="polite"
+              data-testid="wire-validation-message"
+              style={{
+                marginTop: 6,
+                padding: '6px 10px',
+                borderRadius: 6,
+                background:
+                  wireValidationMessage.severity === 'error'
+                    ? 'rgba(204, 51, 51, 0.12)'
+                    : 'rgba(224, 138, 0, 0.15)',
+                border: `1px solid ${
+                  wireValidationMessage.severity === 'error' ? '#cc3333' : '#e08a00'
+                }`,
+                color: wireValidationMessage.severity === 'error' ? '#7a1f1f' : '#704000',
+                fontSize: '0.9em',
+              }}
+            >
+              {wireValidationMessage.text}
+            </div>
+          ) : null}
           {placement ? (
             <div
               role="status"

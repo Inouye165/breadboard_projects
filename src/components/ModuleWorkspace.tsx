@@ -24,6 +24,21 @@ import {
   type PhysicalPoint,
   type PhysicalPointKind,
 } from '../lib/partLibraryModel'
+import {
+  PIN_CAPABILITIES,
+  PIN_DIRECTIONS,
+  PIN_ELECTRICAL_ROLES,
+  PIN_FIVE_V_TOLERANT_VALUES,
+  PIN_PAD_TYPES,
+  PIN_SIDE_LOCATIONS,
+  type PinCapability,
+  type PinDirection,
+  type PinElectricalMetadata,
+  type PinElectricalRole,
+  type PinFiveVTolerant,
+  type PinPadType,
+  type PinSideLocation,
+} from '../lib/pinElectrical'
 import { dedupAgainstExisting, generatePinGrid } from '../lib/pinGrid'
 import { uploadLibraryPartImage } from '../lib/partLibraryApi'
 
@@ -94,6 +109,322 @@ function readFileAsImage(
   })
 }
 
+type LogicalPinRowProps = {
+  pin: LogicalPin
+  physicalPoints: PhysicalPoint[]
+  linkedPointId: string | null
+  onChange: (updater: (current: LogicalPin) => LogicalPin) => void
+  onLinkPhysicalPoint: (pointId: string | null) => void
+  onRemove: () => void
+}
+
+function updateElectrical(
+  current: LogicalPin,
+  patch: Partial<PinElectricalMetadata>,
+): LogicalPin {
+  return {
+    ...current,
+    electrical: { ...(current.electrical ?? {}), ...patch },
+  }
+}
+
+function toggleCapability(
+  current: LogicalPin,
+  capability: PinCapability,
+): LogicalPin {
+  const existing = current.electrical?.capabilities ?? []
+  const next = existing.includes(capability)
+    ? existing.filter((c) => c !== capability)
+    : [...existing, capability]
+  return updateElectrical(current, { capabilities: next })
+}
+
+function LogicalPinRow({
+  pin,
+  physicalPoints,
+  linkedPointId,
+  onChange,
+  onLinkPhysicalPoint,
+  onRemove,
+}: LogicalPinRowProps) {
+  const [expanded, setExpanded] = useState(false)
+  const electrical = pin.electrical ?? {}
+  const voltage = electrical.voltageDomain ?? {}
+  const capabilities = electrical.capabilities ?? []
+
+  return (
+    <li style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+        <select
+          aria-label={`Logical pin ${pin.id} physical point`}
+          title="Physical point number"
+          value={linkedPointId ?? ''}
+          onChange={(event) => onLinkPhysicalPoint(event.target.value || null)}
+          style={{ minWidth: 70 }}
+        >
+          <option value="">Pin #…</option>
+          {physicalPoints.map((point, index) => {
+            const num = index + 1
+            const extra = point.label ? ` (${point.label})` : ''
+            return (
+              <option key={point.id} value={point.id}>
+                {`#${num}${extra}`}
+              </option>
+            )
+          })}
+        </select>
+        <input
+          aria-label={`Logical pin ${pin.id} name`}
+          type="text"
+          placeholder="name (5V, GND, 5)"
+          value={pin.name}
+          onChange={(event) =>
+            onChange((current) => ({ ...current, name: event.target.value }))
+          }
+        />
+        <input
+          aria-label={`Logical pin ${pin.id} function`}
+          type="text"
+          placeholder="function (GPIO5, MISO)"
+          value={pin.function ?? ''}
+          onChange={(event) =>
+            onChange((current) => ({
+              ...current,
+              function: event.target.value || undefined,
+            }))
+          }
+        />
+        <select
+          aria-label={`Logical pin ${pin.id} role`}
+          value={electrical.role ?? 'unknown'}
+          onChange={(event) =>
+            onChange((current) =>
+              updateElectrical(current, { role: event.target.value as PinElectricalRole }),
+            )
+          }
+        >
+          {PIN_ELECTRICAL_ROLES.map((role) => (
+            <option key={role} value={role}>
+              {role}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label={`Logical pin ${pin.id} direction`}
+          value={electrical.direction ?? 'unknown'}
+          onChange={(event) =>
+            onChange((current) =>
+              updateElectrical(current, { direction: event.target.value as PinDirection }),
+            )
+          }
+        >
+          {PIN_DIRECTIONS.map((dir) => (
+            <option key={dir} value={dir}>
+              {dir}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="action-button action-button--ghost"
+          aria-label={`${expanded ? 'Hide' : 'Show'} pin ${pin.id} details`}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? 'Less' : 'More'}
+        </button>
+        <button
+          type="button"
+          className="action-button action-button--ghost"
+          onClick={onRemove}
+        >
+          Remove
+        </button>
+      </div>
+      {expanded ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 8,
+            padding: '6px 4px 8px',
+            borderLeft: '2px solid #ddd',
+            marginLeft: 4,
+          }}
+        >
+          <label style={{ gridColumn: '1 / -1' }}>
+            Description / comments
+            <textarea
+              rows={2}
+              placeholder="e.g. onboard LED, boot strap pin, bootloader UART"
+              value={pin.description ?? ''}
+              onChange={(event) =>
+                onChange((current) => ({
+                  ...current,
+                  description: event.target.value || undefined,
+                }))
+              }
+            />
+          </label>
+          <label>
+            Silkscreen
+            <input
+              type="text"
+              value={electrical.silkscreenLabel ?? ''}
+              onChange={(event) =>
+                onChange((current) =>
+                  updateElectrical(current, {
+                    silkscreenLabel: event.target.value || undefined,
+                  }),
+                )
+              }
+            />
+          </label>
+          <label>
+            Pin number
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={electrical.pinNumber ?? ''}
+              onChange={(event) =>
+                onChange((current) =>
+                  updateElectrical(current, {
+                    pinNumber: event.target.value ? Number(event.target.value) : undefined,
+                  }),
+                )
+              }
+            />
+          </label>
+          <label>
+            Side
+            <select
+              value={electrical.sideLocation ?? 'unknown'}
+              onChange={(event) =>
+                onChange((current) =>
+                  updateElectrical(current, {
+                    sideLocation: event.target.value as PinSideLocation,
+                  }),
+                )
+              }
+            >
+              {PIN_SIDE_LOCATIONS.map((side) => (
+                <option key={side} value={side}>
+                  {side}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Pad type
+            <select
+              value={electrical.padType ?? 'unknown'}
+              onChange={(event) =>
+                onChange((current) =>
+                  updateElectrical(current, { padType: event.target.value as PinPadType }),
+                )
+              }
+            >
+              {PIN_PAD_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Nominal voltage (V)
+            <input
+              type="number"
+              step={0.1}
+              value={voltage.nominalV ?? ''}
+              onChange={(event) =>
+                onChange((current) =>
+                  updateElectrical(current, {
+                    voltageDomain: {
+                      ...(current.electrical?.voltageDomain ?? {}),
+                      nominalV: event.target.value ? Number(event.target.value) : undefined,
+                    },
+                  }),
+                )
+              }
+            />
+          </label>
+          <label>
+            Logic level (V)
+            <input
+              type="number"
+              step={0.1}
+              value={voltage.logicLevelV ?? ''}
+              onChange={(event) =>
+                onChange((current) =>
+                  updateElectrical(current, {
+                    voltageDomain: {
+                      ...(current.electrical?.voltageDomain ?? {}),
+                      logicLevelV: event.target.value ? Number(event.target.value) : undefined,
+                    },
+                  }),
+                )
+              }
+            />
+          </label>
+          <label>
+            5V tolerant
+            <select
+              value={voltage.fiveVTolerant ?? 'unknown'}
+              onChange={(event) =>
+                onChange((current) =>
+                  updateElectrical(current, {
+                    voltageDomain: {
+                      ...(current.electrical?.voltageDomain ?? {}),
+                      fiveVTolerant: event.target.value as PinFiveVTolerant,
+                    },
+                  }),
+                )
+              }
+            >
+              {PIN_FIVE_V_TOLERANT_VALUES.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <fieldset style={{ gridColumn: '1 / -1' }}>
+            <legend>Capabilities</legend>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 12px' }}>
+              {PIN_CAPABILITIES.map((cap) => (
+                <label key={cap} style={{ display: 'inline-flex', gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={capabilities.includes(cap)}
+                    onChange={() =>
+                      onChange((current) => toggleCapability(current, cap))
+                    }
+                  />
+                  {cap}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label style={{ gridColumn: '1 / -1' }}>
+            Notes
+            <textarea
+              rows={2}
+              value={electrical.notes ?? ''}
+              onChange={(event) =>
+                onChange((current) =>
+                  updateElectrical(current, { notes: event.target.value || undefined }),
+                )
+              }
+            />
+          </label>
+        </div>
+      ) : null}
+    </li>
+  )
+}
+
 export function ModuleWorkspace({
   part,
   isBusy = false,
@@ -120,6 +451,8 @@ export function ModuleWorkspace({
   const [eraseMode, setEraseMode] = useState(false)
   const [eraseRect, setEraseRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const [eraseDragging, setEraseDragging] = useState(false)
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null)
+  const [showPointLabels, setShowPointLabels] = useState(true)
 
   const effectiveViewId = part.imageViews.find((v) => v.id === activeViewId)?.id ?? part.imageViews[0]?.id ?? ''
   const activeView = effectiveViewId ? findImageView(part, effectiveViewId) : undefined
@@ -307,6 +640,14 @@ export function ModuleWorkspace({
 
   function handleRemovePoint(pointId: string) {
     pushPart({ ...part, physicalPoints: part.physicalPoints.filter((p) => p.id !== pointId) })
+    setSelectedPointId((current) => (current === pointId ? null : current))
+  }
+
+  function handleUpdatePoint(pointId: string, patch: Partial<PhysicalPoint>) {
+    pushPart({
+      ...part,
+      physicalPoints: part.physicalPoints.map((p) => (p.id === pointId ? { ...p, ...patch } : p)),
+    })
   }
 
   function handleClearAllPoints() {
@@ -463,6 +804,21 @@ export function ModuleWorkspace({
     })
   }
 
+  function handleLinkLogicalPinToPoint(pinId: string, pointId: string | null) {
+    pushPart({
+      ...part,
+      physicalPoints: part.physicalPoints.map((point) => {
+        if (point.id === pointId) {
+          return { ...point, logicalPinId: pinId }
+        }
+        if (point.logicalPinId === pinId) {
+          return { ...point, logicalPinId: undefined }
+        }
+        return point
+      }),
+    })
+  }
+
   // ---- Render -------------------------------------------------------------
 
   const cornerStatus = `Calibrating: click ${CORNER_ORDER[activeCornerIndex]?.label ?? 'done'} corner.`
@@ -575,37 +931,24 @@ export function ModuleWorkspace({
             <p>No logical pins yet. Add VIN, GND, OUT, SDA, SCL, etc.</p>
           ) : (
             <ul className="library-part-editor__list">
-              {part.logicalPins.map((pin) => (
-                <li key={pin.id}>
-                  <input
-                    aria-label={`Logical pin ${pin.id} name`}
-                    type="text"
-                    value={pin.name}
-                    onChange={(event) =>
-                      handleLogicalPinChange(pin.id, (current) => ({ ...current, name: event.target.value }))
+              {part.logicalPins.map((pin) => {
+                const linkedPoint = part.physicalPoints.find(
+                  (point) => point.logicalPinId === pin.id,
+                )
+                return (
+                  <LogicalPinRow
+                    key={pin.id}
+                    pin={pin}
+                    physicalPoints={part.physicalPoints}
+                    linkedPointId={linkedPoint?.id ?? null}
+                    onChange={(updater) => handleLogicalPinChange(pin.id, updater)}
+                    onLinkPhysicalPoint={(pointId) =>
+                      handleLinkLogicalPinToPoint(pin.id, pointId)
                     }
+                    onRemove={() => handleRemoveLogicalPin(pin.id)}
                   />
-                  <input
-                    aria-label={`Logical pin ${pin.id} function`}
-                    type="text"
-                    placeholder="function"
-                    value={pin.function ?? ''}
-                    onChange={(event) =>
-                      handleLogicalPinChange(pin.id, (current) => ({
-                        ...current,
-                        function: event.target.value || undefined,
-                      }))
-                    }
-                  />
-                  <button
-                    type="button"
-                    className="action-button action-button--ghost"
-                    onClick={() => handleRemoveLogicalPin(pin.id)}
-                  >
-                    Remove
-                  </button>
-                </li>
-              ))}
+                )
+              })}
             </ul>
           )}
         </section>
@@ -870,39 +1213,78 @@ export function ModuleWorkspace({
               {calibration ? (
                 <CalibrationOverlay view={activeView} calibration={calibration} />
               ) : null}
-              {calibration && stageMode !== 'calibrate'
+              {calibration
                 ? pointsForView.map((point) => {
                     const px = mmToImagePoint(calibration, { xMm: point.xMm, yMm: point.yMm })
                     const left = (px.x / activeView.imageWidth) * 100
                     const top = (px.y / activeView.imageHeight) * 100
                     const linkedPin = part.logicalPins.find((pin) => pin.id === point.logicalPinId)
+                    const pointNumber = part.physicalPoints.findIndex((p) => p.id === point.id) + 1
+                    const nameSuffix = linkedPin?.name ?? point.label ?? ''
+                    const displayLabel = nameSuffix
+                      ? `${pointNumber} · ${nameSuffix}`
+                      : String(pointNumber)
+                    const isSelected = selectedPointId === point.id
                     return (
-                      <button
+                      <div
                         key={point.id}
-                        type="button"
-                        data-physical-point-id={point.id}
-                        aria-label={`Physical point ${point.id} (${point.kind}${linkedPin ? `, ${linkedPin.name}` : ''})`}
-                        title={`${POINT_KIND_LABELS[point.kind]}${linkedPin ? ` - ${linkedPin.name}` : ''} @ ${point.xMm.toFixed(2)}, ${point.yMm.toFixed(2)} mm`}
-                        onClick={(event) => {
-                          if (eraseMode) return
-                          event.stopPropagation()
-                          handleRemovePoint(point.id)
-                        }}
                         style={{
                           position: 'absolute',
                           left: `${left}%`,
                           top: `${top}%`,
                           transform: 'translate(-50%, -50%)',
-                          width: 14,
-                          height: 14,
-                          borderRadius: 999,
-                          border: '2px solid #fff',
-                          background: linkedPin ? '#1f9d55' : '#dd6b20',
-                          boxShadow: '0 0 0 1px rgba(0,0,0,0.4)',
-                          padding: 0,
-                          cursor: 'pointer',
+                          pointerEvents: 'none',
                         }}
-                      />
+                      >
+                        <button
+                          type="button"
+                          data-physical-point-id={point.id}
+                          aria-label={`Physical point ${displayLabel || point.id} (${point.kind}${linkedPin ? `, linked to ${linkedPin.name}` : ''})`}
+                          aria-pressed={isSelected}
+                          title={`${POINT_KIND_LABELS[point.kind]}${linkedPin ? ` - ${linkedPin.name}` : displayLabel ? ` - ${displayLabel}` : ''} @ ${point.xMm.toFixed(2)}, ${point.yMm.toFixed(2)} mm`}
+                          onClick={(event) => {
+                            if (eraseMode) return
+                            event.stopPropagation()
+                            setSelectedPointId((current) => (current === point.id ? null : point.id))
+                          }}
+                          style={{
+                            display: 'block',
+                            width: isSelected ? 18 : 14,
+                            height: isSelected ? 18 : 14,
+                            borderRadius: 999,
+                            border: isSelected ? '3px solid #2b6cb0' : '2px solid #fff',
+                            background: linkedPin ? '#1f9d55' : '#dd6b20',
+                            boxShadow: isSelected
+                              ? '0 0 0 2px rgba(43, 108, 176, 0.4)'
+                              : '0 0 0 1px rgba(0,0,0,0.4)',
+                            padding: 0,
+                            cursor: 'pointer',
+                            pointerEvents: 'auto',
+                          }}
+                        />
+                        {showPointLabels && displayLabel ? (
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              position: 'absolute',
+                              left: '50%',
+                              top: '100%',
+                              transform: 'translate(-50%, 4px)',
+                              padding: '1px 5px',
+                              borderRadius: 4,
+                              fontSize: 10,
+                              lineHeight: 1.2,
+                              fontWeight: 600,
+                              color: '#fff',
+                              background: linkedPin ? 'rgba(31, 157, 85, 0.92)' : 'rgba(221, 107, 32, 0.92)',
+                              whiteSpace: 'nowrap',
+                              pointerEvents: 'none',
+                            }}
+                          >
+                            {displayLabel}
+                          </span>
+                        ) : null}
+                      </div>
                     )
                   })
                 : null}
@@ -941,6 +1323,115 @@ export function ModuleWorkspace({
               Points on this view: {pointsForView.length}.
             </p>
           ) : null}
+
+          {calibration && pointsForView.length > 0 ? (
+            <div className="library-part-editor__hint" style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 4 }}>
+              <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={showPointLabels}
+                  onChange={(event) => setShowPointLabels(event.target.checked)}
+                />
+                Show pin labels
+              </label>
+              <span style={{ opacity: 0.7 }}>Click a pin to rename it or link it to a logical pin.</span>
+            </div>
+          ) : null}
+
+          {(() => {
+            const selected = selectedPointId
+              ? pointsForView.find((p) => p.id === selectedPointId)
+              : undefined
+            if (!selected) return null
+            const linkedPin = part.logicalPins.find((pin) => pin.id === selected.logicalPinId)
+            return (
+              <div
+                role="region"
+                aria-label="Edit selected pin point"
+                style={{
+                  marginTop: 8,
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: '1px solid #2b6cb0',
+                  background: 'rgba(43, 108, 176, 0.06)',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 12,
+                  alignItems: 'flex-end',
+                }}
+              >
+                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  <strong>Selected:</strong> {linkedPin?.name ?? selected.label ?? '(unlabeled)'}<br />
+                  <span>
+                    {POINT_KIND_LABELS[selected.kind]} @ {selected.xMm.toFixed(2)},{' '}
+                    {selected.yMm.toFixed(2)} mm
+                  </span>
+                </div>
+                <label style={{ display: 'flex', flexDirection: 'column', fontSize: 12 }}>
+                  Label
+                  <input
+                    type="text"
+                    value={selected.label ?? ''}
+                    placeholder="e.g. 5V, GND, 3.3, 4"
+                    onChange={(event) =>
+                      handleUpdatePoint(selected.id, {
+                        label: event.target.value || undefined,
+                      })
+                    }
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', fontSize: 12 }}>
+                  Linked logical pin
+                  <select
+                    value={selected.logicalPinId ?? ''}
+                    onChange={(event) =>
+                      handleUpdatePoint(selected.id, {
+                        logicalPinId: event.target.value || undefined,
+                      })
+                    }
+                  >
+                    <option value="">(none)</option>
+                    {part.logicalPins.map((pin) => (
+                      <option key={pin.id} value={pin.id}>
+                        {pin.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', fontSize: 12 }}>
+                  Kind
+                  <select
+                    value={selected.kind}
+                    onChange={(event) =>
+                      handleUpdatePoint(selected.id, {
+                        kind: event.target.value as PhysicalPointKind,
+                      })
+                    }
+                  >
+                    {PHYSICAL_POINT_KINDS.map((kind) => (
+                      <option key={kind} value={kind}>
+                        {POINT_KIND_LABELS[kind]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => handleRemovePoint(selected.id)}
+                >
+                  Delete pin
+                </button>
+                <button
+                  type="button"
+                  className="action-button action-button--ghost"
+                  onClick={() => setSelectedPointId(null)}
+                >
+                  Done
+                </button>
+              </div>
+            )
+          })()}
         </section>
       </div>
     </section>

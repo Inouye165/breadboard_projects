@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import {
   IMAGE_VIEW_SIDES,
+  LIBRARY_PART_DEFINITION_VERSION,
   LIBRARY_PART_KINDS,
   PART_CATEGORIES,
   PART_RESOURCE_KINDS,
@@ -20,6 +21,15 @@ import {
   type PhysicalPoint,
   type PhysicalPointKind,
 } from '../src/lib/partLibraryModel'
+import {
+  coerceDirection,
+  coerceFiveVTolerant,
+  coercePadType,
+  coerceRole,
+  coerceSideLocation,
+  type PinCapability,
+  type PinElectricalMetadata,
+} from '../src/lib/pinElectrical'
 
 type JsonObject = Record<string, unknown>
 
@@ -105,6 +115,60 @@ function normalizeImageView(value: unknown): PartImageView {
   }
 }
 
+function normalizeElectrical(value: unknown): PinElectricalMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined
+  }
+
+  const voltageSrc = isRecord(value.voltageDomain) ? value.voltageDomain : undefined
+  const currentSrc = isRecord(value.currentLimits) ? value.currentLimits : undefined
+
+  const voltageDomain =
+    voltageSrc !== undefined
+      ? {
+          nominalV: asOptionalNumber(voltageSrc.nominalV),
+          minV: asOptionalNumber(voltageSrc.minV),
+          maxV: asOptionalNumber(voltageSrc.maxV),
+          logicLevelV: asOptionalNumber(voltageSrc.logicLevelV),
+          fiveVTolerant:
+            voltageSrc.fiveVTolerant === undefined
+              ? undefined
+              : coerceFiveVTolerant(voltageSrc.fiveVTolerant),
+        }
+      : undefined
+
+  const currentLimits =
+    currentSrc !== undefined
+      ? {
+          limitMa: asOptionalNumber(currentSrc.limitMa),
+          sourceMa: asOptionalNumber(currentSrc.sourceMa),
+          sinkMa: asOptionalNumber(currentSrc.sinkMa),
+        }
+      : undefined
+
+  const capabilities = Array.isArray(value.capabilities)
+    ? value.capabilities.filter((entry): entry is PinCapability => typeof entry === 'string')
+    : undefined
+
+  return {
+    role: value.role === undefined ? undefined : coerceRole(value.role),
+    direction: value.direction === undefined ? undefined : coerceDirection(value.direction),
+    voltageDomain,
+    currentLimits,
+    capabilities,
+    silkscreenLabel: asOptionalString(value.silkscreenLabel),
+    pinNumber: asOptionalNumber(value.pinNumber),
+    sideLocation:
+      value.sideLocation === undefined ? undefined : coerceSideLocation(value.sideLocation),
+    padType: value.padType === undefined ? undefined : coercePadType(value.padType),
+    pitchMm: asOptionalNumber(value.pitchMm),
+    aliases: asStringArray(value.aliases),
+    notes: asOptionalString(value.notes),
+    datasheetUrl: asOptionalString(value.datasheetUrl),
+    schematicUrl: asOptionalString(value.schematicUrl),
+  }
+}
+
 function normalizeLogicalPin(value: unknown): LogicalPin {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string') {
     throw new Error('Invalid logical pin payload.')
@@ -115,6 +179,7 @@ function normalizeLogicalPin(value: unknown): LogicalPin {
     name: value.name,
     description: asOptionalString(value.description),
     function: asOptionalString(value.function),
+    electrical: normalizeElectrical(value.electrical),
   }
 }
 
@@ -205,6 +270,16 @@ function normalizeLibraryPart(
       : [],
     resources: Array.isArray(value.resources) ? value.resources.map(normalizeResource) : [],
     passive: isRecord(value.passive) ? (value.passive as unknown as GeneratedPassiveSpec) : undefined,
+    definitionVersion:
+      typeof value.definitionVersion === 'number' && Number.isFinite(value.definitionVersion)
+        ? value.definitionVersion
+        : LIBRARY_PART_DEFINITION_VERSION,
+    tags: Array.isArray(value.tags)
+      ? value.tags.filter((entry): entry is string => typeof entry === 'string')
+      : undefined,
+    notes: asOptionalString(value.notes),
+    datasheetUrl: asOptionalString(value.datasheetUrl),
+    schematicUrl: asOptionalString(value.schematicUrl),
     createdAt,
     updatedAt,
   }
